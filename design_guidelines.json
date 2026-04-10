@@ -1,0 +1,102 @@
+{
+  "theme": "dark",
+  "archetype": "Archetype 2: The Performance Pro (Dark Theme) - adapted for Elite Trading and Precision",
+  "emotional_tone": "Authoritative, elite, precise, high-speed, cinematic, command-center focus",
+  "typography": {
+    "fonts": [
+      {
+        "name": "Chivo",
+        "usage": "Headings, Branding, Primary Labels",
+        "google_font_url": "https://fonts.googleapis.com/css2?family=Chivo:wght@300;400;700;900&display=swap",
+        "fallback": "sans-serif"
+      },
+      {
+        "name": "IBM Plex Mono",
+        "usage": "Data, Numbers, Tickers, Stock Prices, Timestamps",
+        "google_font_url": "https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap",
+        "fallback": "monospace"
+      },
+      {
+        "name": "IBM Plex Sans",
+        "usage": "Body Text, UI Elements, Navigation, General Information",
+        "google_font_url": "https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&display=swap",
+        "fallback": "sans-serif"
+      }
+    ],
+    "scale": {
+      "h1": "text-4xl sm:text-5xl font-black tracking-tighter font-sans",
+      "h2": "text-2xl sm:text-3xl font-bold tracking-tight font-sans",
+      "h3": "text-xl sm:text-2xl font-bold tracking-tight font-sans",
+      "metric_large": "text-4xl sm:text-6xl font-black font-mono tracking-tighter",
+      "body": "text-sm sm:text-base font-sans leading-relaxed",
+      "labels_overlines": "text-xs font-mono uppercase tracking-[0.2em]"
+    }
+  },
+  "colors": {
+    "background": {
+      "app": "#0A0A0A",
+      "surface": "#121212",
+      "surface_hover": "#1A1A1A"
+    },
+    "text": {
+      "primary": "#FFFFFF",
+      "secondary": "#A1A1AA",
+      "muted": "#71717A"
+    },
+    "borders": {
+      "default": "rgba(255, 255, 255, 0.1)",
+      "focus": "#007AFF"
+    },
+    "accents": {
+      "primary": "#007AFF",
+      "buy_up": "#00FF66",
+      "sell_down": "#FF3B30",
+      "hold_warning": "#FACC15"
+    }
+  },
+  "layout_and_spacing": {
+    "spacing_scale": "Use standard Tailwind scale (p-2, p-4, p-6). Emphasize structural density over empty negative space, since it's a data-heavy dashboard.",
+    "grid_strategy": "MODE B: The 'Control Room' Grid. Base Grid: grid-cols-1 md:grid-cols-3 lg:grid-cols-4 or 12. Tight gaps (gap-4 or gap-6). The main chart must span large columns, surrounded by widget panels.",
+    "container_styles": "The 'Technical' Look: Containers use 1px solid borders (border-white/10) with sharp corners (rounded-none or rounded-sm max). Avoid heavy drop shadows in favor of grid lines.",
+    "alignment": "Left-align dense metrics and tabular data for fast scanning. Align numbers to the right in data tables."
+  },
+  "components_strategy": {
+    "forms_and_inputs": "Shadcn based. Deep dark background, white text, 1px border. Focus states use Volt Blue rings. Keep inputs sharp and technical.",
+    "buttons": "Tactile minimalism. Solid primary background for main CTAs. Explicit hover states must set text color (e.g. hover:bg-white hover:text-black).",
+    "cards_panels": "Grid Borders style. Panels separated by thin lines. No floating cards.",
+    "charts": "Recharts. Central dominant placement. Use neon accent lines (Green/Red/Blue) on dark background. Grid lines should be very subtle (rgba(255,255,255,0.05)).",
+    "alerts_notifications": "Glassmorphism for urgent notifications (backdrop-blur-xl bg-black/80, 1px border colored by alert type). MUST pulse for urgency.",
+    "image_upload": "Prominent drag-and-drop zone. Use dashed borders. On hover, apply a 'Tracing Beam' effect or border color shift to Volt Blue."
+  },
+  "motion_and_interactions": {
+    "hover": "Precise, snappy transitions (duration-150). Text and background color must explicitly change.",
+    "active": "Slight scale down (scale-95) for buttons.",
+    "focus": "High contrast ring with offset.",
+    "alerts": "Urgent stock alerts should flash or pulse twice on entry."
+  },
+  "assets_and_media": {
+    "icons_library": "lucide-react (default) for sharp, consistent line icons.",
+    "image_urls": [
+      {
+        "url": "https://static.prod-images.emergentagent.com/jobs/d26647a6-e3d4-4742-a01c-ad660f6f876c/images/f254f41b286c0457b9326446b69f2ade09567de0872e79008d34ff2693996e4e.png",
+        "description": "High-end abstract deep charcoal background with subtle neon green and pink glowing geometric lines.",
+        "category": "background",
+        "usage_instructions": "Use as a background overlay in non-data heavy areas (like login screen or sidebar footer) with very low opacity to give the app a premium, high-tech trading feel."
+      }
+    ]
+  },
+  "testing": {
+    "attributes": "All interactive and key informational elements MUST include a `data-testid` attribute in kebab-case format (e.g., `data-testid=\"stock-search-input\"`)."
+  },
+  "instructions_to_main_agent": [
+    "Strictly follow the Performance Pro dark archetype. No soft pastels or light themes.",
+    "Include Google Fonts imports for Chivo, IBM Plex Mono, and IBM Plex Sans in the main CSS file.",
+    "Build the dashboard using a dense 'Control Room' grid where the main chart dominates and smaller panels surround it.",
+    "Implement clear, high-contrast Buy (Electric Green #00FF66) and Sell (Electric Blaze #FF3B30) semantic colors.",
+    "Use standard HTML + Tailwind for structural layouts, and customized Shadcn components for complex interactions (Dropdowns, Dialogs, etc.).",
+    "The image upload component for chart analysis should be intuitive and centrally accessible.",
+    "Use .js files (JSX syntax) since the environment is JavaScript-based.",
+    "Apply data-testid to all interactive components.",
+    "Urgent notifications must be highly visible, utilizing glassmorphism and pulsing animations."
+  ]
+}
