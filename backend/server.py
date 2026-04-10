@@ -8,9 +8,10 @@ from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional, Dict, Any
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import base64
 import httpx
+import yfinance as yf
 from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
 
 ROOT_DIR = Path(__file__).parent
@@ -23,7 +24,6 @@ db = client[os.environ['DB_NAME']]
 
 # API Keys
 EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY')
-ALPHA_VANTAGE_KEY = os.environ.get('ALPHA_VANTAGE_KEY', 'demo')
 
 # Create the main app
 app = FastAPI()
@@ -220,204 +220,143 @@ class PredictionHistory(BaseModel):
     timestamp: datetime
 
 # =============================================================================
-# ALPHA VANTAGE SERVICE WITH DEMO FALLBACK
+# YAHOO FINANCE SERVICE (FREE - NO API KEY REQUIRED)
 # =============================================================================
 
-# Popular stock data for demo/fallback purposes
-DEMO_STOCK_DATA = {
-    "AAPL": {"name": "Apple Inc.", "price": 178.50, "change": 2.35, "volume": 52000000},
-    "MSFT": {"name": "Microsoft Corporation", "price": 378.25, "change": -1.50, "volume": 28000000},
-    "GOOGL": {"name": "Alphabet Inc.", "price": 141.80, "change": 1.20, "volume": 21000000},
-    "AMZN": {"name": "Amazon.com Inc.", "price": 178.90, "change": 3.40, "volume": 35000000},
-    "TSLA": {"name": "Tesla Inc.", "price": 248.50, "change": -5.20, "volume": 85000000},
-    "META": {"name": "Meta Platforms Inc.", "price": 505.75, "change": 8.30, "volume": 18000000},
-    "NVDA": {"name": "NVIDIA Corporation", "price": 875.50, "change": 15.20, "volume": 42000000},
-    "JPM": {"name": "JPMorgan Chase & Co.", "price": 195.40, "change": -0.80, "volume": 9500000},
-    "V": {"name": "Visa Inc.", "price": 275.30, "change": 1.10, "volume": 7200000},
-    "WMT": {"name": "Walmart Inc.", "price": 165.20, "change": 0.45, "volume": 6800000},
-    "BTC": {"name": "Bitcoin USD", "price": 67500.00, "change": 1250.00, "volume": 25000000000},
-    "ETH": {"name": "Ethereum USD", "price": 3450.00, "change": 85.00, "volume": 12000000000},
+# Popular stock tickers for search suggestions
+POPULAR_STOCKS = {
+    "AAPL": "Apple Inc.",
+    "MSFT": "Microsoft Corporation",
+    "GOOGL": "Alphabet Inc.",
+    "AMZN": "Amazon.com Inc.",
+    "TSLA": "Tesla Inc.",
+    "META": "Meta Platforms Inc.",
+    "NVDA": "NVIDIA Corporation",
+    "JPM": "JPMorgan Chase & Co.",
+    "V": "Visa Inc.",
+    "WMT": "Walmart Inc.",
+    "DIS": "The Walt Disney Company",
+    "NFLX": "Netflix Inc.",
+    "AMD": "Advanced Micro Devices",
+    "INTC": "Intel Corporation",
+    "BA": "Boeing Company",
+    "KO": "Coca-Cola Company",
+    "PEP": "PepsiCo Inc.",
+    "NKE": "Nike Inc.",
+    "SBUX": "Starbucks Corporation",
+    "PYPL": "PayPal Holdings Inc.",
+    "BTC-USD": "Bitcoin USD",
+    "ETH-USD": "Ethereum USD",
+    "SPY": "SPDR S&P 500 ETF",
+    "QQQ": "Invesco QQQ Trust",
 }
 
-def get_demo_quote(ticker: str) -> Dict[str, Any]:
-    """Generate demo quote data for a ticker"""
-    import random
-    ticker = ticker.upper()
-    
-    if ticker in DEMO_STOCK_DATA:
-        data = DEMO_STOCK_DATA[ticker]
-        base_price = data["price"]
-        change = data["change"] + random.uniform(-2, 2)
-    else:
-        # Generate random data for unknown tickers
-        base_price = random.uniform(50, 500)
-        change = random.uniform(-10, 10)
-    
-    price = round(base_price + random.uniform(-5, 5), 2)
-    change_pct = round((change / price) * 100, 2)
-    
-    return {
-        "ticker": ticker,
-        "price": price,
-        "change": round(change, 2),
-        "change_percent": f"{change_pct:+.2f}%",
-        "volume": random.randint(1000000, 100000000),
-        "high": round(price * 1.02, 2),
-        "low": round(price * 0.98, 2),
-        "open": round(price - change * 0.5, 2),
-        "previous_close": round(price - change, 2)
-    }
+def get_stock_quote_sync(ticker: str) -> Dict[str, Any]:
+    """Fetch real-time stock quote from Yahoo Finance (FREE)"""
+    try:
+        stock = yf.Ticker(ticker)
+        info = stock.info
+        
+        # Get current price data
+        price = info.get('currentPrice') or info.get('regularMarketPrice') or info.get('previousClose', 0)
+        previous_close = info.get('previousClose', price)
+        change = round(price - previous_close, 2) if price and previous_close else 0
+        change_pct = round((change / previous_close) * 100, 2) if previous_close else 0
+        
+        return {
+            "ticker": ticker.upper(),
+            "name": info.get('shortName') or info.get('longName') or ticker,
+            "price": round(price, 2) if price else 0,
+            "change": change,
+            "change_percent": f"{change_pct:+.2f}%",
+            "volume": info.get('volume') or info.get('regularMarketVolume', 0),
+            "high": round(info.get('dayHigh') or info.get('regularMarketDayHigh', price), 2),
+            "low": round(info.get('dayLow') or info.get('regularMarketDayLow', price), 2),
+            "open": round(info.get('open') or info.get('regularMarketOpen', price), 2),
+            "previous_close": round(previous_close, 2),
+            "market_cap": info.get('marketCap'),
+            "pe_ratio": info.get('trailingPE'),
+            "week_52_high": info.get('fiftyTwoWeekHigh'),
+            "week_52_low": info.get('fiftyTwoWeekLow'),
+        }
+    except Exception as e:
+        logger.error(f"Error fetching Yahoo Finance quote for {ticker}: {e}")
+        return None
 
-def get_demo_search_results(query: str) -> List[Dict[str, str]]:
-    """Generate demo search results"""
+def search_stocks_sync(query: str) -> List[Dict[str, str]]:
+    """Search for stocks - uses predefined list + Yahoo Finance validation"""
     query = query.upper()
     results = []
     
-    for ticker, data in DEMO_STOCK_DATA.items():
-        if query in ticker or query.lower() in data["name"].lower():
+    # First check our popular stocks list
+    for ticker, name in POPULAR_STOCKS.items():
+        if query in ticker or query.lower() in name.lower():
             results.append({
                 "ticker": ticker,
-                "name": data["name"],
+                "name": name,
                 "type": "Equity",
                 "region": "United States"
             })
     
-    # If no matches, return some popular stocks
-    if not results:
-        for ticker, data in list(DEMO_STOCK_DATA.items())[:5]:
-            results.append({
-                "ticker": ticker,
-                "name": data["name"],
-                "type": "Equity",
-                "region": "United States"
-            })
+    # If query looks like a ticker, try to validate with Yahoo Finance
+    if len(query) <= 6 and query.isalpha() and query not in [r['ticker'] for r in results]:
+        try:
+            stock = yf.Ticker(query)
+            info = stock.info
+            if info.get('shortName') or info.get('longName'):
+                results.insert(0, {
+                    "ticker": query,
+                    "name": info.get('shortName') or info.get('longName'),
+                    "type": info.get('quoteType', 'Equity'),
+                    "region": info.get('country', 'United States')
+                })
+        except Exception:
+            pass
     
     return results[:10]
 
-def generate_demo_daily_data(ticker: str) -> List[Dict[str, Any]]:
-    """Generate demo daily candlestick data"""
-    import random
-    from datetime import timedelta
-    
-    ticker = ticker.upper()
-    base_price = DEMO_STOCK_DATA.get(ticker, {}).get("price", random.uniform(100, 300))
-    
-    data = []
-    current_date = datetime.now(timezone.utc)
-    price = base_price
-    
-    for i in range(60):
-        date = current_date - timedelta(days=i)
-        volatility = random.uniform(0.98, 1.02)
+def get_daily_data_sync(ticker: str) -> List[Dict[str, Any]]:
+    """Fetch daily candlestick data from Yahoo Finance (FREE)"""
+    try:
+        stock = yf.Ticker(ticker)
+        # Get 3 months of data
+        hist = stock.history(period="3mo")
         
-        open_price = price * random.uniform(0.99, 1.01)
-        close_price = open_price * volatility
-        high_price = max(open_price, close_price) * random.uniform(1.0, 1.02)
-        low_price = min(open_price, close_price) * random.uniform(0.98, 1.0)
+        if hist.empty:
+            logger.warning(f"No historical data for {ticker}")
+            return []
         
-        data.append({
-            "date": date.strftime("%Y-%m-%d"),
-            "open": round(open_price, 2),
-            "high": round(high_price, 2),
-            "low": round(low_price, 2),
-            "close": round(close_price, 2),
-            "volume": random.randint(5000000, 50000000)
-        })
+        candles = []
+        for date, row in hist.iterrows():
+            candles.append({
+                "date": date.strftime("%Y-%m-%d"),
+                "open": round(row['Open'], 2),
+                "high": round(row['High'], 2),
+                "low": round(row['Low'], 2),
+                "close": round(row['Close'], 2),
+                "volume": int(row['Volume'])
+            })
         
-        price = close_price * random.uniform(0.97, 1.03)
-    
-    return data
+        # Return most recent first
+        return list(reversed(candles[-60:]))
+    except Exception as e:
+        logger.error(f"Error fetching Yahoo Finance history for {ticker}: {e}")
+        return []
 
 async def get_stock_quote(ticker: str) -> Dict[str, Any]:
-    """Fetch real-time stock quote from Alpha Vantage with demo fallback"""
-    async with httpx.AsyncClient() as client_http:
-        url = f"https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={ticker}&apikey={ALPHA_VANTAGE_KEY}"
-        try:
-            response = await client_http.get(url, timeout=10.0)
-            data = response.json()
-            
-            # Check for valid data
-            if "Global Quote" in data and data["Global Quote"]:
-                quote = data["Global Quote"]
-                if quote.get("05. price"):
-                    return {
-                        "ticker": quote.get("01. symbol", ticker),
-                        "price": float(quote.get("05. price", 0)),
-                        "change": float(quote.get("09. change", 0)),
-                        "change_percent": quote.get("10. change percent", "0%"),
-                        "volume": int(quote.get("06. volume", 0)),
-                        "high": float(quote.get("03. high", 0)),
-                        "low": float(quote.get("04. low", 0)),
-                        "open": float(quote.get("02. open", 0)),
-                        "previous_close": float(quote.get("08. previous close", 0))
-                    }
-            
-            # Check for API limit or demo message
-            if "Note" in data or "Information" in data:
-                logger.warning(f"Alpha Vantage API limit reached, using demo data for {ticker}")
-        except Exception as e:
-            logger.error(f"Error fetching stock quote: {e}")
-    
-    # Fallback to demo data
-    logger.info(f"Using demo data for {ticker}")
-    return get_demo_quote(ticker)
+    """Async wrapper for stock quote"""
+    import asyncio
+    return await asyncio.get_event_loop().run_in_executor(None, get_stock_quote_sync, ticker.upper())
 
 async def search_stocks(query: str) -> List[Dict[str, str]]:
-    """Search for stocks by name or ticker with demo fallback"""
-    async with httpx.AsyncClient() as client_http:
-        url = f"https://www.alphavantage.co/query?function=SYMBOL_SEARCH&keywords={query}&apikey={ALPHA_VANTAGE_KEY}"
-        try:
-            response = await client_http.get(url, timeout=10.0)
-            data = response.json()
-            if "bestMatches" in data and data["bestMatches"]:
-                return [
-                    {
-                        "ticker": match.get("1. symbol", ""),
-                        "name": match.get("2. name", ""),
-                        "type": match.get("3. type", ""),
-                        "region": match.get("4. region", "")
-                    }
-                    for match in data["bestMatches"][:10]
-                ]
-            
-            # Check for API limit
-            if "Note" in data or "Information" in data:
-                logger.warning("Alpha Vantage API limit reached, using demo search")
-        except Exception as e:
-            logger.error(f"Error searching stocks: {e}")
-    
-    # Fallback to demo data
-    return get_demo_search_results(query)
+    """Async wrapper for stock search"""
+    import asyncio
+    return await asyncio.get_event_loop().run_in_executor(None, search_stocks_sync, query)
 
 async def get_daily_data(ticker: str) -> List[Dict[str, Any]]:
-    """Fetch daily candlestick data from Alpha Vantage with demo fallback"""
-    async with httpx.AsyncClient() as client_http:
-        url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={ticker}&apikey={ALPHA_VANTAGE_KEY}&outputsize=compact"
-        try:
-            response = await client_http.get(url, timeout=15.0)
-            data = response.json()
-            if "Time Series (Daily)" in data:
-                time_series = data["Time Series (Daily)"]
-                candles = []
-                for date, values in list(time_series.items())[:60]:  # Last 60 days
-                    candles.append({
-                        "date": date,
-                        "open": float(values["1. open"]),
-                        "high": float(values["2. high"]),
-                        "low": float(values["3. low"]),
-                        "close": float(values["4. close"]),
-                        "volume": int(values["5. volume"])
-                    })
-                return candles
-            
-            # Check for API limit
-            if "Note" in data or "Information" in data:
-                logger.warning("Alpha Vantage API limit reached, using demo daily data")
-        except Exception as e:
-            logger.error(f"Error fetching daily data: {e}")
-    
-    # Fallback to demo data
-    return generate_demo_daily_data(ticker)
+    """Async wrapper for daily data"""
+    import asyncio
+    return await asyncio.get_event_loop().run_in_executor(None, get_daily_data_sync, ticker.upper())
 
 # =============================================================================
 # AI PREDICTION SERVICE
