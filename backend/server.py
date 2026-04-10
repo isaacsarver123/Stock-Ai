@@ -1,17 +1,23 @@
-from fastapi import FastAPI, APIRouter, HTTPException, UploadFile, File
+from fastapi import FastAPI, APIRouter, HTTPException, UploadFile, File, BackgroundTasks
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
 from pathlib import Path
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, EmailStr
 from typing import List, Optional, Dict, Any
 import uuid
 from datetime import datetime, timezone, timedelta
 import base64
 import httpx
 import yfinance as yf
+import asyncio
+import pytz
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
+import resend
+from twilio.rest import Client as TwilioClient
 from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
 
 ROOT_DIR = Path(__file__).parent
@@ -36,138 +42,71 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Scheduler for cron jobs
+scheduler = AsyncIOScheduler(timezone=pytz.timezone('America/New_York'))
+
+# Trading hours (EST)
+MARKET_OPEN_HOUR = 9
+MARKET_OPEN_MINUTE = 30
+MARKET_CLOSE_HOUR = 16
+MARKET_CLOSE_MINUTE = 0
+
+# Top 30 most traded stocks
+TOP_30_STOCKS = [
+    "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "TSLA", "META", "BRK-B", "UNH", "JNJ",
+    "V", "XOM", "JPM", "WMT", "MA", "PG", "CVX", "HD", "LLY", "MRK",
+    "ABBV", "PEP", "KO", "COST", "AVGO", "TMO", "MCD", "CSCO", "ACN", "DHR"
+]
+
 # =============================================================================
 # CANDLESTICK PATTERNS DATABASE (500+ patterns)
 # =============================================================================
 CANDLESTICK_PATTERNS = {
-    # Bullish Reversal Patterns
-    "hammer": {"type": "bullish", "reliability": "high", "description": "Small body at top, long lower shadow (2x body), little/no upper shadow"},
-    "inverted_hammer": {"type": "bullish", "reliability": "moderate", "description": "Small body at bottom, long upper shadow, little/no lower shadow"},
-    "bullish_engulfing": {"type": "bullish", "reliability": "high", "description": "Small bearish candle followed by larger bullish candle that engulfs it"},
-    "piercing_line": {"type": "bullish", "reliability": "moderate", "description": "Bearish candle followed by bullish opening lower, closing above midpoint"},
-    "morning_star": {"type": "bullish", "reliability": "high", "description": "Three candle pattern: bearish, small body, bullish"},
-    "morning_doji_star": {"type": "bullish", "reliability": "high", "description": "Morning star with doji as middle candle"},
-    "three_white_soldiers": {"type": "bullish", "reliability": "high", "description": "Three consecutive long bullish candles with higher closes"},
-    "bullish_harami": {"type": "bullish", "reliability": "moderate", "description": "Large bearish candle containing small bullish candle"},
-    "bullish_harami_cross": {"type": "bullish", "reliability": "moderate", "description": "Large bearish candle containing doji"},
-    "tweezer_bottom": {"type": "bullish", "reliability": "moderate", "description": "Two candles with matching lows at support"},
-    "three_inside_up": {"type": "bullish", "reliability": "high", "description": "Bearish candle, small bullish inside, bullish breakout"},
-    "three_outside_up": {"type": "bullish", "reliability": "high", "description": "Bullish engulfing followed by bullish confirmation"},
-    "bullish_belt_hold": {"type": "bullish", "reliability": "moderate", "description": "Long bullish candle opening at low with no lower shadow"},
-    "bullish_kicker": {"type": "bullish", "reliability": "very_high", "description": "Bearish candle followed by gap-up bullish candle"},
-    "three_stars_in_the_south": {"type": "bullish", "reliability": "moderate", "description": "Three declining bearish candles with decreasing size"},
-    "stick_sandwich": {"type": "bullish", "reliability": "moderate", "description": "Bearish-bullish-bearish pattern with same closing prices"},
-    "matching_low": {"type": "bullish", "reliability": "moderate", "description": "Two bearish candles closing at same level"},
-    "bullish_breakaway": {"type": "bullish", "reliability": "moderate", "description": "Gap down followed by rally back through gap"},
-    "ladder_bottom": {"type": "bullish", "reliability": "moderate", "description": "Three bearish candles then bullish reversal"},
-    "takuri": {"type": "bullish", "reliability": "high", "description": "Similar to hammer with very long lower shadow"},
+    "hammer": {"type": "bullish", "reliability": "high", "description": "Small body at top, long lower shadow (2x body), little/no upper shadow", "expected_move": 5},
+    "inverted_hammer": {"type": "bullish", "reliability": "moderate", "description": "Small body at bottom, long upper shadow, little/no lower shadow", "expected_move": 3},
+    "bullish_engulfing": {"type": "bullish", "reliability": "high", "description": "Small bearish candle followed by larger bullish candle that engulfs it", "expected_move": 7},
+    "piercing_line": {"type": "bullish", "reliability": "moderate", "description": "Bearish candle followed by bullish opening lower, closing above midpoint", "expected_move": 4},
+    "morning_star": {"type": "bullish", "reliability": "high", "description": "Three candle pattern: bearish, small body, bullish", "expected_move": 8},
+    "morning_doji_star": {"type": "bullish", "reliability": "high", "description": "Morning star with doji as middle candle", "expected_move": 9},
+    "three_white_soldiers": {"type": "bullish", "reliability": "high", "description": "Three consecutive long bullish candles with higher closes", "expected_move": 12},
+    "bullish_harami": {"type": "bullish", "reliability": "moderate", "description": "Large bearish candle containing small bullish candle", "expected_move": 4},
+    "bullish_harami_cross": {"type": "bullish", "reliability": "moderate", "description": "Large bearish candle containing doji", "expected_move": 5},
+    "tweezer_bottom": {"type": "bullish", "reliability": "moderate", "description": "Two candles with matching lows at support", "expected_move": 4},
+    "bullish_kicker": {"type": "bullish", "reliability": "very_high", "description": "Bearish candle followed by gap-up bullish candle", "expected_move": 15},
+    "abandoned_baby_bullish": {"type": "bullish", "reliability": "very_high", "description": "Bearish, gapped doji, gapped bullish", "expected_move": 18},
     
-    # Bearish Reversal Patterns
-    "hanging_man": {"type": "bearish", "reliability": "moderate", "description": "Small body at top of range, long lower shadow, at resistance"},
-    "shooting_star": {"type": "bearish", "reliability": "moderate", "description": "Small body at bottom, long upper shadow, at resistance"},
-    "bearish_engulfing": {"type": "bearish", "reliability": "high", "description": "Small bullish candle followed by larger bearish candle"},
-    "dark_cloud_cover": {"type": "bearish", "reliability": "moderate", "description": "Bullish candle followed by bearish opening higher, closing below midpoint"},
-    "evening_star": {"type": "bearish", "reliability": "high", "description": "Three candle pattern: bullish, small body, bearish"},
-    "evening_doji_star": {"type": "bearish", "reliability": "high", "description": "Evening star with doji as middle candle"},
-    "three_black_crows": {"type": "bearish", "reliability": "high", "description": "Three consecutive long bearish candles with lower closes"},
-    "bearish_harami": {"type": "bearish", "reliability": "moderate", "description": "Large bullish candle containing small bearish candle"},
-    "bearish_harami_cross": {"type": "bearish", "reliability": "moderate", "description": "Large bullish candle containing doji"},
-    "tweezer_top": {"type": "bearish", "reliability": "moderate", "description": "Two candles with matching highs at resistance"},
-    "three_inside_down": {"type": "bearish", "reliability": "high", "description": "Bullish candle, small bearish inside, bearish breakout"},
-    "three_outside_down": {"type": "bearish", "reliability": "high", "description": "Bearish engulfing followed by bearish confirmation"},
-    "bearish_belt_hold": {"type": "bearish", "reliability": "moderate", "description": "Long bearish candle opening at high with no upper shadow"},
-    "bearish_kicker": {"type": "bearish", "reliability": "very_high", "description": "Bullish candle followed by gap-down bearish candle"},
-    "two_crows": {"type": "bearish", "reliability": "moderate", "description": "Bullish candle, gap-up small bearish, larger bearish"},
-    "three_crows": {"type": "bearish", "reliability": "high", "description": "Three declining bearish candles"},
-    "upside_gap_two_crows": {"type": "bearish", "reliability": "moderate", "description": "Two bearish candles above bullish with gaps"},
-    "bearish_breakaway": {"type": "bearish", "reliability": "moderate", "description": "Gap up followed by decline back through gap"},
-    "advance_block": {"type": "bearish", "reliability": "moderate", "description": "Three bullish candles with decreasing momentum"},
-    "deliberation": {"type": "bearish", "reliability": "moderate", "description": "Two bullish candles followed by spinning top"},
+    "hanging_man": {"type": "bearish", "reliability": "moderate", "description": "Small body at top of range, long lower shadow, at resistance", "expected_move": -5},
+    "shooting_star": {"type": "bearish", "reliability": "moderate", "description": "Small body at bottom, long upper shadow, at resistance", "expected_move": -5},
+    "bearish_engulfing": {"type": "bearish", "reliability": "high", "description": "Small bullish candle followed by larger bearish candle", "expected_move": -7},
+    "dark_cloud_cover": {"type": "bearish", "reliability": "moderate", "description": "Bullish candle followed by bearish opening higher, closing below midpoint", "expected_move": -5},
+    "evening_star": {"type": "bearish", "reliability": "high", "description": "Three candle pattern: bullish, small body, bearish", "expected_move": -8},
+    "evening_doji_star": {"type": "bearish", "reliability": "high", "description": "Evening star with doji as middle candle", "expected_move": -9},
+    "three_black_crows": {"type": "bearish", "reliability": "high", "description": "Three consecutive long bearish candles with lower closes", "expected_move": -12},
+    "bearish_harami": {"type": "bearish", "reliability": "moderate", "description": "Large bullish candle containing small bearish candle", "expected_move": -4},
+    "bearish_kicker": {"type": "bearish", "reliability": "very_high", "description": "Bullish candle followed by gap-down bearish candle", "expected_move": -15},
+    "abandoned_baby_bearish": {"type": "bearish", "reliability": "very_high", "description": "Bullish, gapped doji, gapped bearish", "expected_move": -18},
     
-    # Continuation Patterns
-    "rising_three_methods": {"type": "bullish_continuation", "reliability": "high", "description": "Long bullish, three small bearish, long bullish"},
-    "falling_three_methods": {"type": "bearish_continuation", "reliability": "high", "description": "Long bearish, three small bullish, long bearish"},
-    "upside_tasuki_gap": {"type": "bullish_continuation", "reliability": "moderate", "description": "Two bullish with gap, bearish partially filling"},
-    "downside_tasuki_gap": {"type": "bearish_continuation", "reliability": "moderate", "description": "Two bearish with gap, bullish partially filling"},
-    "mat_hold": {"type": "bullish_continuation", "reliability": "high", "description": "Similar to rising three methods with gaps"},
-    "separating_lines_bullish": {"type": "bullish_continuation", "reliability": "moderate", "description": "Bearish candle followed by bullish same open"},
-    "separating_lines_bearish": {"type": "bearish_continuation", "reliability": "moderate", "description": "Bullish candle followed by bearish same open"},
-    "side_by_side_white_lines": {"type": "bullish_continuation", "reliability": "moderate", "description": "Gap up followed by two similar bullish candles"},
-    "side_by_side_black_lines": {"type": "bearish_continuation", "reliability": "moderate", "description": "Gap down followed by two similar bearish candles"},
-    "on_neck_line": {"type": "bearish_continuation", "reliability": "low", "description": "Bearish candle, bullish closing at low"},
-    "in_neck_line": {"type": "bearish_continuation", "reliability": "low", "description": "Bearish candle, bullish closing slightly into body"},
-    "thrusting": {"type": "bearish_continuation", "reliability": "low", "description": "Bearish candle, bullish closing into lower half"},
-    
-    # Doji Patterns
-    "doji": {"type": "neutral", "reliability": "moderate", "description": "Open and close nearly equal, indecision"},
-    "long_legged_doji": {"type": "neutral", "reliability": "moderate", "description": "Doji with long upper and lower shadows"},
-    "dragonfly_doji": {"type": "bullish", "reliability": "moderate", "description": "Doji with long lower shadow, no upper shadow"},
-    "gravestone_doji": {"type": "bearish", "reliability": "moderate", "description": "Doji with long upper shadow, no lower shadow"},
-    "four_price_doji": {"type": "neutral", "reliability": "low", "description": "OHLC all equal, extremely rare"},
-    "northern_doji": {"type": "bearish", "reliability": "moderate", "description": "Doji at top of uptrend"},
-    "southern_doji": {"type": "bullish", "reliability": "moderate", "description": "Doji at bottom of downtrend"},
-    "tri_star": {"type": "reversal", "reliability": "high", "description": "Three consecutive dojis"},
-    
-    # Spinning Tops
-    "spinning_top": {"type": "neutral", "reliability": "low", "description": "Small body with shadows on both sides"},
-    "high_wave": {"type": "neutral", "reliability": "moderate", "description": "Small body with very long shadows"},
-    
-    # Marubozu Patterns
-    "bullish_marubozu": {"type": "bullish", "reliability": "high", "description": "Long bullish body with no shadows"},
-    "bearish_marubozu": {"type": "bearish", "reliability": "high", "description": "Long bearish body with no shadows"},
-    "opening_marubozu_bullish": {"type": "bullish", "reliability": "moderate", "description": "No lower shadow, small upper shadow"},
-    "opening_marubozu_bearish": {"type": "bearish", "reliability": "moderate", "description": "No upper shadow, small lower shadow"},
-    "closing_marubozu_bullish": {"type": "bullish", "reliability": "moderate", "description": "No upper shadow, small lower shadow"},
-    "closing_marubozu_bearish": {"type": "bearish", "reliability": "moderate", "description": "No lower shadow, small upper shadow"},
-    
-    # Gap Patterns
-    "bullish_gap": {"type": "bullish", "reliability": "moderate", "description": "Price gaps up and holds"},
-    "bearish_gap": {"type": "bearish", "reliability": "moderate", "description": "Price gaps down and holds"},
-    "island_reversal_top": {"type": "bearish", "reliability": "high", "description": "Gap up, consolidation, gap down"},
-    "island_reversal_bottom": {"type": "bullish", "reliability": "high", "description": "Gap down, consolidation, gap up"},
-    "exhaustion_gap": {"type": "reversal", "reliability": "moderate", "description": "Large gap in direction of trend, often final"},
-    "runaway_gap": {"type": "continuation", "reliability": "moderate", "description": "Gap in middle of trend move"},
-    "common_gap": {"type": "neutral", "reliability": "low", "description": "Gap that typically gets filled"},
-    
-    # Complex Multi-Candle Patterns
-    "abandoned_baby_bullish": {"type": "bullish", "reliability": "very_high", "description": "Bearish, gapped doji, gapped bullish"},
-    "abandoned_baby_bearish": {"type": "bearish", "reliability": "very_high", "description": "Bullish, gapped doji, gapped bearish"},
-    "concealing_baby_swallow": {"type": "bullish", "reliability": "moderate", "description": "Four bearish candles with specific structure"},
-    "unique_three_river_bottom": {"type": "bullish", "reliability": "moderate", "description": "Bearish, harami with long shadow, small bullish"},
-    "homing_pigeon": {"type": "bullish", "reliability": "moderate", "description": "Two bearish candles, second inside first"},
-    "descending_hawk": {"type": "bearish", "reliability": "moderate", "description": "Two bullish candles, second inside first"},
-    
-    # Candlestick with Volume
-    "volume_climax_up": {"type": "potential_reversal", "reliability": "moderate", "description": "Large range up candle on extreme volume"},
-    "volume_climax_down": {"type": "potential_reversal", "reliability": "moderate", "description": "Large range down candle on extreme volume"},
-    "no_supply": {"type": "bullish", "reliability": "moderate", "description": "Narrow range down candle on low volume"},
-    "no_demand": {"type": "bearish", "reliability": "moderate", "description": "Narrow range up candle on low volume"},
-    "effort_vs_result_bullish": {"type": "bullish", "reliability": "moderate", "description": "High volume with upward progress"},
-    "effort_vs_result_bearish": {"type": "bearish", "reliability": "moderate", "description": "High volume with downward progress"},
-    
-    # Extended patterns (adding more to reach 500+)
-    "bullish_meeting_lines": {"type": "bullish", "reliability": "moderate", "description": "Bearish and bullish candles closing at same level"},
-    "bearish_meeting_lines": {"type": "bearish", "reliability": "moderate", "description": "Bullish and bearish candles closing at same level"},
-    "bullish_counterattack": {"type": "bullish", "reliability": "moderate", "description": "Large bearish followed by large bullish, same close"},
-    "bearish_counterattack": {"type": "bearish", "reliability": "moderate", "description": "Large bullish followed by large bearish, same close"},
-    "upside_gap_three_methods": {"type": "bullish_continuation", "reliability": "moderate", "description": "Two bullish with gap, bearish filling gap"},
-    "downside_gap_three_methods": {"type": "bearish_continuation", "reliability": "moderate", "description": "Two bearish with gap, bullish filling gap"},
-    "rising_window": {"type": "bullish_continuation", "reliability": "moderate", "description": "Gap up acting as support"},
-    "falling_window": {"type": "bearish_continuation", "reliability": "moderate", "description": "Gap down acting as resistance"},
+    "doji": {"type": "neutral", "reliability": "moderate", "description": "Open and close nearly equal, indecision", "expected_move": 0},
+    "dragonfly_doji": {"type": "bullish", "reliability": "moderate", "description": "Doji with long lower shadow, no upper shadow", "expected_move": 4},
+    "gravestone_doji": {"type": "bearish", "reliability": "moderate", "description": "Doji with long upper shadow, no lower shadow", "expected_move": -4},
+    "bullish_marubozu": {"type": "bullish", "reliability": "high", "description": "Long bullish body with no shadows", "expected_move": 8},
+    "bearish_marubozu": {"type": "bearish", "reliability": "high", "description": "Long bearish body with no shadows", "expected_move": -8},
 }
 
-# Add more patterns programmatically to reach 500+
-pattern_variations = ["strong", "weak", "confirmed", "unconfirmed", "with_volume", "low_volume"]
-timeframes = ["1min", "5min", "15min", "30min", "1hour", "4hour", "daily", "weekly"]
-for base_pattern in list(CANDLESTICK_PATTERNS.keys())[:60]:
+# Add more patterns programmatically
+pattern_variations = ["strong", "weak", "confirmed"]
+timeframes = ["daily", "weekly"]
+for base_pattern in list(CANDLESTICK_PATTERNS.keys())[:25]:
     for variation in pattern_variations:
         for timeframe in timeframes:
             pattern_key = f"{base_pattern}_{variation}_{timeframe}"
             base_info = CANDLESTICK_PATTERNS[base_pattern]
+            multiplier = 1.5 if variation == "strong" else (0.7 if variation == "weak" else 1.2)
             CANDLESTICK_PATTERNS[pattern_key] = {
                 "type": base_info["type"],
                 "reliability": base_info["reliability"],
-                "description": f"{base_info['description']} ({variation}, {timeframe} timeframe)",
+                "description": f"{base_info['description']} ({variation}, {timeframe})",
+                "expected_move": int(base_info.get("expected_move", 5) * multiplier),
                 "timeframe": timeframe,
                 "variation": variation
             }
@@ -177,8 +116,29 @@ logger.info(f"Loaded {len(CANDLESTICK_PATTERNS)} candlestick patterns")
 # =============================================================================
 # PYDANTIC MODELS
 # =============================================================================
-class StockSearchRequest(BaseModel):
-    query: str  # ticker or company name
+class SettingsModel(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default="global_settings")
+    discord_webhook_url: Optional[str] = None
+    email_recipient: Optional[str] = None
+    resend_api_key: Optional[str] = None
+    twilio_account_sid: Optional[str] = None
+    twilio_auth_token: Optional[str] = None
+    twilio_phone_from: Optional[str] = None
+    twilio_phone_to: Optional[str] = None
+    notifications_enabled: bool = True
+    last_news_scan: Optional[str] = None
+    last_pattern_scan: Optional[str] = None
+
+class SettingsUpdate(BaseModel):
+    discord_webhook_url: Optional[str] = None
+    email_recipient: Optional[str] = None
+    resend_api_key: Optional[str] = None
+    twilio_account_sid: Optional[str] = None
+    twilio_auth_token: Optional[str] = None
+    twilio_phone_from: Optional[str] = None
+    twilio_phone_to: Optional[str] = None
+    notifications_enabled: Optional[bool] = None
 
 class StockPredictionResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -186,15 +146,16 @@ class StockPredictionResponse(BaseModel):
     ticker: str
     company_name: str
     current_price: Optional[float] = None
-    prediction: str  # BUY, SELL, HOLD
-    confidence: float  # 0-100
+    prediction: str
+    confidence: float
     analysis: str
     detected_patterns: List[str]
-    risk_level: str  # LOW, MEDIUM, HIGH
+    risk_level: str
     price_target: Optional[float] = None
     time_horizon: str
     is_urgent: bool = False
     urgency_reason: Optional[str] = None
+    expected_move_percent: Optional[float] = None
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class ImageAnalysisRequest(BaseModel):
@@ -205,64 +166,55 @@ class NotificationResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     ticker: str
-    type: str  # URGENT_BUY, URGENT_SELL, ALERT
+    type: str  # URGENT_BUY, URGENT_SELL, ALERT, NEWS_ALERT, PATTERN_ALERT
     message: str
     reason: str
+    severity: str = "medium"  # low, medium, high, critical
+    expected_move: Optional[float] = None
+    source: str = "system"  # system, news_scan, pattern_scan
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     is_read: bool = False
+    sent_discord: bool = False
+    sent_email: bool = False
+    sent_sms: bool = False
 
-class PredictionHistory(BaseModel):
+class NewsItem(BaseModel):
     model_config = ConfigDict(extra="ignore")
-    id: str
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     ticker: str
-    prediction: str
-    confidence: float
-    timestamp: datetime
+    headline: str
+    summary: str
+    source: str
+    sentiment: str  # positive, negative, neutral
+    impact_score: float  # 0-100
+    potential_move: float  # expected % move
+    url: Optional[str] = None
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class ScanResult(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    scan_type: str  # news, pattern
+    started_at: datetime
+    completed_at: Optional[datetime] = None
+    stocks_scanned: int = 0
+    alerts_generated: int = 0
+    status: str = "running"  # running, completed, failed
+    details: Optional[Dict] = None
 
 # =============================================================================
-# YAHOO FINANCE SERVICE (FREE - NO API KEY REQUIRED)
+# YAHOO FINANCE SERVICE
 # =============================================================================
-
-# Popular stock tickers for search suggestions
-POPULAR_STOCKS = {
-    "AAPL": "Apple Inc.",
-    "MSFT": "Microsoft Corporation",
-    "GOOGL": "Alphabet Inc.",
-    "AMZN": "Amazon.com Inc.",
-    "TSLA": "Tesla Inc.",
-    "META": "Meta Platforms Inc.",
-    "NVDA": "NVIDIA Corporation",
-    "JPM": "JPMorgan Chase & Co.",
-    "V": "Visa Inc.",
-    "WMT": "Walmart Inc.",
-    "DIS": "The Walt Disney Company",
-    "NFLX": "Netflix Inc.",
-    "AMD": "Advanced Micro Devices",
-    "INTC": "Intel Corporation",
-    "BA": "Boeing Company",
-    "KO": "Coca-Cola Company",
-    "PEP": "PepsiCo Inc.",
-    "NKE": "Nike Inc.",
-    "SBUX": "Starbucks Corporation",
-    "PYPL": "PayPal Holdings Inc.",
-    "BTC-USD": "Bitcoin USD",
-    "ETH-USD": "Ethereum USD",
-    "SPY": "SPDR S&P 500 ETF",
-    "QQQ": "Invesco QQQ Trust",
-}
+POPULAR_STOCKS = {ticker: ticker for ticker in TOP_30_STOCKS}
 
 def get_stock_quote_sync(ticker: str) -> Dict[str, Any]:
-    """Fetch real-time stock quote from Yahoo Finance (FREE)"""
     try:
         stock = yf.Ticker(ticker)
         info = stock.info
-        
-        # Get current price data
         price = info.get('currentPrice') or info.get('regularMarketPrice') or info.get('previousClose', 0)
         previous_close = info.get('previousClose', price)
         change = round(price - previous_close, 2) if price and previous_close else 0
         change_pct = round((change / previous_close) * 100, 2) if previous_close else 0
-        
         return {
             "ticker": ticker.upper(),
             "name": info.get('shortName') or info.get('longName') or ticker,
@@ -280,25 +232,25 @@ def get_stock_quote_sync(ticker: str) -> Dict[str, Any]:
             "week_52_low": info.get('fiftyTwoWeekLow'),
         }
     except Exception as e:
-        logger.error(f"Error fetching Yahoo Finance quote for {ticker}: {e}")
+        logger.error(f"Error fetching quote for {ticker}: {e}")
         return None
 
 def search_stocks_sync(query: str) -> List[Dict[str, str]]:
-    """Search for stocks - uses predefined list + Yahoo Finance validation"""
     query = query.upper()
     results = []
-    
-    # First check our popular stocks list
-    for ticker, name in POPULAR_STOCKS.items():
-        if query in ticker or query.lower() in name.lower():
-            results.append({
-                "ticker": ticker,
-                "name": name,
-                "type": "Equity",
-                "region": "United States"
-            })
-    
-    # If query looks like a ticker, try to validate with Yahoo Finance
+    for ticker in TOP_30_STOCKS:
+        if query in ticker:
+            try:
+                stock = yf.Ticker(ticker)
+                info = stock.info
+                results.append({
+                    "ticker": ticker,
+                    "name": info.get('shortName') or info.get('longName') or ticker,
+                    "type": "Equity",
+                    "region": "United States"
+                })
+            except:
+                results.append({"ticker": ticker, "name": ticker, "type": "Equity", "region": "United States"})
     if len(query) <= 6 and query.isalpha() and query not in [r['ticker'] for r in results]:
         try:
             stock = yf.Ticker(query)
@@ -310,22 +262,16 @@ def search_stocks_sync(query: str) -> List[Dict[str, str]]:
                     "type": info.get('quoteType', 'Equity'),
                     "region": info.get('country', 'United States')
                 })
-        except Exception:
+        except:
             pass
-    
     return results[:10]
 
-def get_daily_data_sync(ticker: str) -> List[Dict[str, Any]]:
-    """Fetch daily candlestick data from Yahoo Finance (FREE)"""
+def get_daily_data_sync(ticker: str, period: str = "1mo") -> List[Dict[str, Any]]:
     try:
         stock = yf.Ticker(ticker)
-        # Get 3 months of data
-        hist = stock.history(period="3mo")
-        
+        hist = stock.history(period=period)
         if hist.empty:
-            logger.warning(f"No historical data for {ticker}")
             return []
-        
         candles = []
         for date, row in hist.iterrows():
             candles.append({
@@ -336,74 +282,224 @@ def get_daily_data_sync(ticker: str) -> List[Dict[str, Any]]:
                 "close": round(row['Close'], 2),
                 "volume": int(row['Volume'])
             })
-        
-        # Return most recent first
         return list(reversed(candles[-60:]))
     except Exception as e:
-        logger.error(f"Error fetching Yahoo Finance history for {ticker}: {e}")
+        logger.error(f"Error fetching history for {ticker}: {e}")
         return []
 
 async def get_stock_quote(ticker: str) -> Dict[str, Any]:
-    """Async wrapper for stock quote"""
-    import asyncio
     return await asyncio.get_event_loop().run_in_executor(None, get_stock_quote_sync, ticker.upper())
 
 async def search_stocks(query: str) -> List[Dict[str, str]]:
-    """Async wrapper for stock search"""
-    import asyncio
     return await asyncio.get_event_loop().run_in_executor(None, search_stocks_sync, query)
 
-async def get_daily_data(ticker: str) -> List[Dict[str, Any]]:
-    """Async wrapper for daily data"""
-    import asyncio
-    return await asyncio.get_event_loop().run_in_executor(None, get_daily_data_sync, ticker.upper())
+async def get_daily_data(ticker: str, period: str = "1mo") -> List[Dict[str, Any]]:
+    return await asyncio.get_event_loop().run_in_executor(None, get_daily_data_sync, ticker.upper(), period)
 
 # =============================================================================
-# AI PREDICTION SERVICE
+# NOTIFICATION SERVICE
 # =============================================================================
-async def analyze_stock_with_ai(ticker: str, quote: Dict, daily_data: List[Dict], patterns: List[str]) -> Dict[str, Any]:
-    """Use OpenAI GPT-5.2 to analyze stock and provide prediction"""
+async def get_settings() -> SettingsModel:
+    """Get global settings from database"""
+    settings_doc = await db.settings.find_one({"id": "global_settings"}, {"_id": 0})
+    if settings_doc:
+        return SettingsModel(**settings_doc)
+    return SettingsModel()
+
+async def save_settings(settings: SettingsModel):
+    """Save settings to database"""
+    await db.settings.update_one(
+        {"id": "global_settings"},
+        {"$set": settings.model_dump()},
+        upsert=True
+    )
+
+async def send_discord_notification(webhook_url: str, message: str, embed: Dict = None) -> bool:
+    """Send notification to Discord webhook"""
+    if not webhook_url:
+        return False
+    try:
+        async with httpx.AsyncClient() as http_client:
+            payload = {"content": message}
+            if embed:
+                payload["embeds"] = [embed]
+            response = await http_client.post(webhook_url, json=payload, timeout=10.0)
+            return response.status_code in [200, 204]
+    except Exception as e:
+        logger.error(f"Discord notification error: {e}")
+        return False
+
+async def send_email_notification(api_key: str, to_email: str, subject: str, html_content: str) -> bool:
+    """Send email via Resend"""
+    if not api_key or not to_email:
+        return False
+    try:
+        resend.api_key = api_key
+        params = {
+            "from": "MarketPulse AI <onboarding@resend.dev>",
+            "to": [to_email],
+            "subject": subject,
+            "html": html_content
+        }
+        await asyncio.to_thread(resend.Emails.send, params)
+        return True
+    except Exception as e:
+        logger.error(f"Email notification error: {e}")
+        return False
+
+async def send_sms_notification(account_sid: str, auth_token: str, from_phone: str, to_phone: str, message: str) -> bool:
+    """Send SMS via Twilio"""
+    if not all([account_sid, auth_token, from_phone, to_phone]):
+        return False
+    try:
+        twilio_client = TwilioClient(account_sid, auth_token)
+        await asyncio.to_thread(
+            twilio_client.messages.create,
+            body=message,
+            from_=from_phone,
+            to=to_phone
+        )
+        return True
+    except Exception as e:
+        logger.error(f"SMS notification error: {e}")
+        return False
+
+async def dispatch_notification(notification: NotificationResponse):
+    """Dispatch notification based on severity level"""
+    settings = await get_settings()
+    if not settings.notifications_enabled:
+        return
+    
+    severity = notification.severity
+    ticker = notification.ticker
+    message = notification.message
+    
+    # Build Discord embed
+    color = 0xFF0000 if "SELL" in notification.type else (0x00FF00 if "BUY" in notification.type else 0xFFFF00)
+    discord_embed = {
+        "title": f"🚨 {notification.type} - {ticker}",
+        "description": message,
+        "color": color,
+        "fields": [
+            {"name": "Severity", "value": severity.upper(), "inline": True},
+            {"name": "Source", "value": notification.source, "inline": True},
+        ],
+        "footer": {"text": f"MarketPulse AI • {notification.timestamp.strftime('%Y-%m-%d %H:%M:%S')} EST"}
+    }
+    if notification.expected_move:
+        discord_embed["fields"].append({"name": "Expected Move", "value": f"{notification.expected_move:+.1f}%", "inline": True})
+    
+    # Build email HTML
+    email_html = f"""
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background: #1a1a1a; color: white;">
+        <h1 style="color: {'#FF3B30' if 'SELL' in notification.type else '#00FF66'};">🚨 {notification.type}</h1>
+        <h2 style="color: #007AFF;">{ticker}</h2>
+        <p style="font-size: 16px; line-height: 1.6;">{message}</p>
+        <div style="margin-top: 20px; padding: 15px; background: #2a2a2a; border-radius: 8px;">
+            <p><strong>Severity:</strong> {severity.upper()}</p>
+            <p><strong>Source:</strong> {notification.source}</p>
+            {f'<p><strong>Expected Move:</strong> {notification.expected_move:+.1f}%</p>' if notification.expected_move else ''}
+            <p><strong>Reason:</strong> {notification.reason}</p>
+        </div>
+        <p style="color: #666; font-size: 12px; margin-top: 20px;">MarketPulse AI • {notification.timestamp.strftime('%Y-%m-%d %H:%M:%S')} EST</p>
+    </div>
+    """
+    
+    sms_message = f"MarketPulse AI: {notification.type} - {ticker}\n{message[:100]}..."
+    
+    # Dispatch based on severity
+    # Critical (30%+ moves): All 3 channels
+    # High: Discord + Email
+    # Medium: Discord only
+    # Low: Email only (batched)
+    
+    update_fields = {}
+    
+    if severity == "critical":
+        # Send to all channels
+        if settings.discord_webhook_url:
+            success = await send_discord_notification(settings.discord_webhook_url, f"🚨 **CRITICAL ALERT** 🚨", discord_embed)
+            update_fields["sent_discord"] = success
+        if settings.resend_api_key and settings.email_recipient:
+            success = await send_email_notification(settings.resend_api_key, settings.email_recipient, f"🚨 CRITICAL: {notification.type} - {ticker}", email_html)
+            update_fields["sent_email"] = success
+        if settings.twilio_account_sid:
+            success = await send_sms_notification(
+                settings.twilio_account_sid, settings.twilio_auth_token,
+                settings.twilio_phone_from, settings.twilio_phone_to, sms_message
+            )
+            update_fields["sent_sms"] = success
+    
+    elif severity == "high":
+        # Discord + Email
+        if settings.discord_webhook_url:
+            success = await send_discord_notification(settings.discord_webhook_url, "", discord_embed)
+            update_fields["sent_discord"] = success
+        if settings.resend_api_key and settings.email_recipient:
+            success = await send_email_notification(settings.resend_api_key, settings.email_recipient, f"Alert: {notification.type} - {ticker}", email_html)
+            update_fields["sent_email"] = success
+    
+    elif severity == "medium":
+        # Discord only
+        if settings.discord_webhook_url:
+            success = await send_discord_notification(settings.discord_webhook_url, "", discord_embed)
+            update_fields["sent_discord"] = success
+    
+    else:  # low
+        # Email only
+        if settings.resend_api_key and settings.email_recipient:
+            success = await send_email_notification(settings.resend_api_key, settings.email_recipient, f"Update: {notification.type} - {ticker}", email_html)
+            update_fields["sent_email"] = success
+    
+    # Update notification record
+    if update_fields:
+        await db.notifications.update_one({"id": notification.id}, {"$set": update_fields})
+
+# =============================================================================
+# NEWS SCANNING SERVICE
+# =============================================================================
+async def scan_news_with_ai(hours_back: int = 1) -> List[NewsItem]:
+    """Scan financial news using AI with web search capability"""
+    news_items = []
+    
     chat = LlmChat(
         api_key=EMERGENT_LLM_KEY,
-        session_id=f"stock-analysis-{ticker}-{uuid.uuid4()}",
-        system_message="""You are an expert stock market analyst with deep knowledge of technical analysis, candlestick patterns, and market psychology. 
-        Analyze the provided stock data and candlestick patterns to give a precise prediction.
+        session_id=f"news-scan-{uuid.uuid4()}",
+        system_message="""You are a financial news analyst. Scan recent financial news and identify any news that could cause significant stock price movements (10%+ up or down).
         
-        Your response must be in JSON format with these exact keys:
-        {
-            "prediction": "BUY" or "SELL" or "HOLD",
-            "confidence": number between 0-100,
-            "analysis": "detailed analysis string",
-            "risk_level": "LOW" or "MEDIUM" or "HIGH",
-            "price_target": number or null,
-            "time_horizon": "short" or "medium" or "long",
-            "is_urgent": true or false,
-            "urgency_reason": "reason string if urgent, otherwise null"
-        }"""
+Focus on:
+- Major security breaches or hacks
+- Earnings surprises (big beats or misses)
+- FDA approvals or rejections
+- Major lawsuits or regulatory actions
+- CEO resignations or scandals
+- Major acquisitions or mergers
+- Significant product launches or failures
+- Bankruptcy filings or debt issues
+
+For each significant news item, provide:
+- The stock ticker affected
+- A brief headline
+- Summary of the news
+- Sentiment (positive/negative/neutral)
+- Impact score (0-100, where 100 is most impactful)
+- Expected price move percentage (positive or negative)
+
+Return your response as a JSON array of objects with keys: ticker, headline, summary, sentiment, impact_score, potential_move, source"""
     ).with_model("openai", "gpt-5.2")
     
-    # Prepare data summary for AI
-    recent_candles = daily_data[:5] if daily_data else []
-    price_trend = "unknown"
-    if len(daily_data) >= 5:
-        recent_closes = [c["close"] for c in daily_data[:5]]
-        price_trend = "upward" if recent_closes[0] > recent_closes[-1] else "downward"
+    prompt = f"""Search for and analyze the most impactful financial news from the last {hours_back} hours.
     
-    prompt = f"""Analyze this stock:
-    
-Ticker: {ticker}
-Current Price: ${quote.get('price', 'N/A')}
-Today's Change: {quote.get('change_percent', 'N/A')}
-Volume: {quote.get('volume', 'N/A')}
-High/Low: ${quote.get('high', 'N/A')} / ${quote.get('low', 'N/A')}
+Look for news about major companies that could cause significant stock price movements (15%+ up or down).
+Focus especially on:
+- Security breaches (like data breaches, hacking incidents)
+- Earnings surprises
+- Regulatory actions
+- Product recalls or failures
+- Executive scandals
 
-Recent Price Trend (5 days): {price_trend}
-Recent Candles: {recent_candles}
-
-Detected Candlestick Patterns: {patterns}
-
-Based on this technical data and the detected patterns, provide your analysis and prediction.
-Remember to return ONLY valid JSON."""
+Return a JSON array of the most impactful news items. If no significant news, return an empty array [].
+Only include news that could realistically move a stock 10% or more."""
 
     try:
         user_message = UserMessage(text=prompt)
@@ -411,248 +507,506 @@ Remember to return ONLY valid JSON."""
         
         # Parse JSON response
         import json
-        # Extract JSON from response
-        json_start = response.find('{')
-        json_end = response.rfind('}') + 1
+        json_start = response.find('[')
+        json_end = response.rfind(']') + 1
         if json_start != -1 and json_end > json_start:
             json_str = response[json_start:json_end]
-            return json.loads(json_str)
+            news_data = json.loads(json_str)
+            
+            for item in news_data:
+                if abs(item.get('potential_move', 0)) >= 10:  # Only high-impact news
+                    news_item = NewsItem(
+                        ticker=item.get('ticker', 'UNKNOWN'),
+                        headline=item.get('headline', ''),
+                        summary=item.get('summary', ''),
+                        source=item.get('source', 'AI News Scan'),
+                        sentiment=item.get('sentiment', 'neutral'),
+                        impact_score=item.get('impact_score', 50),
+                        potential_move=item.get('potential_move', 0)
+                    )
+                    news_items.append(news_item)
     except Exception as e:
-        logger.error(f"AI analysis error: {e}")
+        logger.error(f"News scan error: {e}")
     
-    # Fallback response
-    return {
-        "prediction": "HOLD",
-        "confidence": 50,
-        "analysis": "Unable to complete full analysis. Recommend further research.",
-        "risk_level": "MEDIUM",
-        "price_target": None,
-        "time_horizon": "medium",
-        "is_urgent": False,
-        "urgency_reason": None
-    }
-
-async def analyze_chart_image_with_ai(image_base64: str, ticker: Optional[str] = None) -> Dict[str, Any]:
-    """Analyze chart image using OpenAI GPT-5.2 vision"""
-    chat = LlmChat(
-        api_key=EMERGENT_LLM_KEY,
-        session_id=f"chart-analysis-{uuid.uuid4()}",
-        system_message="""You are an expert technical analyst specializing in reading stock charts and identifying candlestick patterns.
-        Analyze the provided chart image and identify:
-        1. Any candlestick patterns visible
-        2. Trend direction
-        3. Support and resistance levels
-        4. Your prediction for the stock
-        
-        Your response must be in JSON format with these exact keys:
-        {
-            "detected_patterns": ["pattern1", "pattern2"],
-            "trend": "uptrend" or "downtrend" or "sideways",
-            "support_level": number or null,
-            "resistance_level": number or null,
-            "prediction": "BUY" or "SELL" or "HOLD",
-            "confidence": number between 0-100,
-            "analysis": "detailed analysis string",
-            "risk_level": "LOW" or "MEDIUM" or "HIGH",
-            "is_urgent": true or false,
-            "urgency_reason": "reason string if urgent, otherwise null"
-        }"""
-    ).with_model("openai", "gpt-5.2")
-    
-    ticker_context = f"for {ticker}" if ticker else ""
-    prompt = f"""Analyze this stock chart image {ticker_context}. 
-    Identify any candlestick patterns, trend direction, and provide your trading recommendation.
-    Return ONLY valid JSON."""
-    
-    try:
-        image_content = ImageContent(image_base64=image_base64)
-        user_message = UserMessage(text=prompt, file_contents=[image_content])
-        response = await chat.send_message(user_message)
-        
-        # Parse JSON response
-        import json
-        json_start = response.find('{')
-        json_end = response.rfind('}') + 1
-        if json_start != -1 and json_end > json_start:
-            json_str = response[json_start:json_end]
-            return json.loads(json_str)
-    except Exception as e:
-        logger.error(f"Chart analysis error: {e}")
-    
-    return {
-        "detected_patterns": [],
-        "trend": "unknown",
-        "support_level": None,
-        "resistance_level": None,
-        "prediction": "HOLD",
-        "confidence": 40,
-        "analysis": "Unable to fully analyze the chart image. Please try with a clearer image.",
-        "risk_level": "HIGH",
-        "is_urgent": False,
-        "urgency_reason": None
-    }
+    return news_items
 
 # =============================================================================
-# PATTERN DETECTION
+# PATTERN SCANNING SERVICE
 # =============================================================================
-def detect_patterns_from_data(daily_data: List[Dict]) -> List[str]:
-    """Detect candlestick patterns from daily data"""
-    if len(daily_data) < 3:
+def detect_patterns_from_data(daily_data: List[Dict]) -> List[Dict]:
+    """Detect candlestick patterns and return with expected moves"""
+    if len(daily_data) < 5:
         return []
     
     detected = []
     
-    # Simple pattern detection logic
-    for i in range(min(len(daily_data) - 2, 10)):
+    for i in range(min(len(daily_data) - 2, 7)):
         candle = daily_data[i]
         prev_candle = daily_data[i + 1] if i + 1 < len(daily_data) else None
-        prev_prev = daily_data[i + 2] if i + 2 < len(daily_data) else None
         
         body = abs(candle["close"] - candle["open"])
         upper_shadow = candle["high"] - max(candle["open"], candle["close"])
         lower_shadow = min(candle["open"], candle["close"]) - candle["low"]
+        total_range = candle["high"] - candle["low"]
         
         is_bullish = candle["close"] > candle["open"]
         
-        # Doji detection
-        if body < (candle["high"] - candle["low"]) * 0.1:
-            if lower_shadow > upper_shadow * 2:
-                detected.append("dragonfly_doji")
-            elif upper_shadow > lower_shadow * 2:
-                detected.append("gravestone_doji")
-            else:
-                detected.append("doji")
+        # Pattern detection with expected moves
+        if body > 0 and total_range > 0:
+            body_ratio = body / total_range
+            
+            # Doji patterns
+            if body_ratio < 0.1:
+                if lower_shadow > upper_shadow * 2:
+                    pattern_info = CANDLESTICK_PATTERNS.get("dragonfly_doji", {})
+                    detected.append({"name": "dragonfly_doji", "expected_move": pattern_info.get("expected_move", 4), "reliability": "moderate"})
+                elif upper_shadow > lower_shadow * 2:
+                    pattern_info = CANDLESTICK_PATTERNS.get("gravestone_doji", {})
+                    detected.append({"name": "gravestone_doji", "expected_move": pattern_info.get("expected_move", -4), "reliability": "moderate"})
+            
+            # Hammer/Hanging Man
+            if lower_shadow >= body * 2 and upper_shadow < body * 0.5:
+                if is_bullish:
+                    pattern_info = CANDLESTICK_PATTERNS.get("hammer", {})
+                    detected.append({"name": "hammer", "expected_move": pattern_info.get("expected_move", 5), "reliability": "high"})
+                else:
+                    pattern_info = CANDLESTICK_PATTERNS.get("hanging_man", {})
+                    detected.append({"name": "hanging_man", "expected_move": pattern_info.get("expected_move", -5), "reliability": "moderate"})
+            
+            # Shooting Star/Inverted Hammer
+            if upper_shadow >= body * 2 and lower_shadow < body * 0.5:
+                if is_bullish:
+                    pattern_info = CANDLESTICK_PATTERNS.get("inverted_hammer", {})
+                    detected.append({"name": "inverted_hammer", "expected_move": pattern_info.get("expected_move", 3), "reliability": "moderate"})
+                else:
+                    pattern_info = CANDLESTICK_PATTERNS.get("shooting_star", {})
+                    detected.append({"name": "shooting_star", "expected_move": pattern_info.get("expected_move", -5), "reliability": "moderate"})
+            
+            # Marubozu
+            if upper_shadow < body * 0.05 and lower_shadow < body * 0.05:
+                if is_bullish:
+                    pattern_info = CANDLESTICK_PATTERNS.get("bullish_marubozu", {})
+                    detected.append({"name": "bullish_marubozu", "expected_move": pattern_info.get("expected_move", 8), "reliability": "high"})
+                else:
+                    pattern_info = CANDLESTICK_PATTERNS.get("bearish_marubozu", {})
+                    detected.append({"name": "bearish_marubozu", "expected_move": pattern_info.get("expected_move", -8), "reliability": "high"})
         
-        # Hammer/Hanging Man
-        if body > 0 and lower_shadow >= body * 2 and upper_shadow < body * 0.5:
-            if is_bullish:
-                detected.append("hammer")
-            else:
-                detected.append("hanging_man")
-        
-        # Shooting Star/Inverted Hammer
-        if body > 0 and upper_shadow >= body * 2 and lower_shadow < body * 0.5:
-            if is_bullish:
-                detected.append("inverted_hammer")
-            else:
-                detected.append("shooting_star")
-        
-        # Marubozu
-        if body > 0 and upper_shadow < body * 0.05 and lower_shadow < body * 0.05:
-            if is_bullish:
-                detected.append("bullish_marubozu")
-            else:
-                detected.append("bearish_marubozu")
-        
-        # Engulfing patterns (require previous candle)
+        # Engulfing patterns
         if prev_candle:
-            prev_body = abs(prev_candle["close"] - prev_candle["open"])
             prev_is_bullish = prev_candle["close"] > prev_candle["open"]
             
             if is_bullish and not prev_is_bullish:
                 if candle["open"] <= prev_candle["close"] and candle["close"] >= prev_candle["open"]:
-                    detected.append("bullish_engulfing")
+                    pattern_info = CANDLESTICK_PATTERNS.get("bullish_engulfing", {})
+                    detected.append({"name": "bullish_engulfing", "expected_move": pattern_info.get("expected_move", 7), "reliability": "high"})
             
             if not is_bullish and prev_is_bullish:
                 if candle["open"] >= prev_candle["close"] and candle["close"] <= prev_candle["open"]:
-                    detected.append("bearish_engulfing")
+                    pattern_info = CANDLESTICK_PATTERNS.get("bearish_engulfing", {})
+                    detected.append({"name": "bearish_engulfing", "expected_move": pattern_info.get("expected_move", -7), "reliability": "high"})
     
-    # Return unique patterns
-    return list(set(detected))[:10]
+    # Remove duplicates and return
+    seen = set()
+    unique_patterns = []
+    for p in detected:
+        if p["name"] not in seen:
+            seen.add(p["name"])
+            unique_patterns.append(p)
+    
+    return unique_patterns
+
+async def scan_top_stocks_patterns() -> List[Dict]:
+    """Scan top 30 stocks for significant patterns"""
+    alerts = []
+    
+    for ticker in TOP_30_STOCKS:
+        try:
+            # Get 1 week of data
+            daily_data = await get_daily_data(ticker, "1wk")
+            if not daily_data:
+                continue
+            
+            patterns = detect_patterns_from_data(daily_data)
+            
+            # Filter for high-confidence patterns with large expected moves
+            for pattern in patterns:
+                expected_move = pattern.get("expected_move", 0)
+                reliability = pattern.get("reliability", "low")
+                
+                # Only alert on patterns with >75% reliability and >15% expected move
+                if reliability in ["high", "very_high"] and abs(expected_move) >= 15:
+                    quote = await get_stock_quote(ticker)
+                    alerts.append({
+                        "ticker": ticker,
+                        "name": quote.get("name", ticker) if quote else ticker,
+                        "pattern": pattern["name"],
+                        "expected_move": expected_move,
+                        "reliability": reliability,
+                        "current_price": quote.get("price") if quote else None
+                    })
+        except Exception as e:
+            logger.error(f"Error scanning {ticker}: {e}")
+    
+    return alerts
+
+# =============================================================================
+# CRON JOB FUNCTIONS
+# =============================================================================
+def is_market_hours() -> bool:
+    """Check if market is currently open"""
+    est = pytz.timezone('America/New_York')
+    now = datetime.now(est)
+    
+    # Check if weekend
+    if now.weekday() >= 5:
+        return False
+    
+    # Check if within trading hours
+    market_open = now.replace(hour=MARKET_OPEN_HOUR, minute=MARKET_OPEN_MINUTE, second=0, microsecond=0)
+    market_close = now.replace(hour=MARKET_CLOSE_HOUR, minute=MARKET_CLOSE_MINUTE, second=0, microsecond=0)
+    
+    return market_open <= now <= market_close
+
+async def hourly_news_scan():
+    """Hourly news scan - runs during trading hours only"""
+    if not is_market_hours():
+        logger.info("Market closed - skipping news scan")
+        return
+    
+    logger.info("Starting hourly news scan...")
+    settings = await get_settings()
+    
+    # Determine hours to scan
+    hours_back = 1
+    if settings.last_news_scan:
+        try:
+            last_scan = datetime.fromisoformat(settings.last_news_scan)
+            hours_back = max(1, int((datetime.now(timezone.utc) - last_scan).total_seconds() / 3600))
+        except:
+            pass
+    
+    # Create scan record
+    scan_result = ScanResult(
+        scan_type="news",
+        started_at=datetime.now(timezone.utc)
+    )
+    scan_doc = scan_result.model_dump()
+    scan_doc['started_at'] = scan_doc['started_at'].isoformat()
+    await db.scan_results.insert_one(scan_doc)
+    
+    try:
+        news_items = await scan_news_with_ai(hours_back)
+        alerts_generated = 0
+        
+        for news in news_items:
+            # Save news item
+            news_doc = news.model_dump()
+            news_doc['timestamp'] = news_doc['timestamp'].isoformat()
+            await db.news_items.insert_one(news_doc)
+            
+            # Create notification for high-impact news
+            if abs(news.potential_move) >= 20:
+                severity = "critical" if abs(news.potential_move) >= 30 else "high"
+                notification = NotificationResponse(
+                    ticker=news.ticker,
+                    type="URGENT_SELL" if news.potential_move < 0 else "URGENT_BUY",
+                    message=news.headline,
+                    reason=news.summary,
+                    severity=severity,
+                    expected_move=news.potential_move,
+                    source="news_scan"
+                )
+                
+                notif_doc = notification.model_dump()
+                notif_doc['timestamp'] = notif_doc['timestamp'].isoformat()
+                await db.notifications.insert_one(notif_doc)
+                
+                await dispatch_notification(notification)
+                alerts_generated += 1
+        
+        # Update settings with last scan time
+        settings.last_news_scan = datetime.now(timezone.utc).isoformat()
+        await save_settings(settings)
+        
+        # Update scan result
+        await db.scan_results.update_one(
+            {"id": scan_result.id},
+            {"$set": {
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "stocks_scanned": len(TOP_30_STOCKS),
+                "alerts_generated": alerts_generated,
+                "status": "completed",
+                "details": {"news_items_found": len(news_items)}
+            }}
+        )
+        
+        logger.info(f"News scan completed: {len(news_items)} items, {alerts_generated} alerts")
+    
+    except Exception as e:
+        logger.error(f"News scan failed: {e}")
+        await db.scan_results.update_one(
+            {"id": scan_result.id},
+            {"$set": {"status": "failed", "details": {"error": str(e)}}}
+        )
+
+async def daily_pattern_scan():
+    """Daily scan of top 30 stocks for candlestick patterns"""
+    if not is_market_hours():
+        logger.info("Market closed - skipping pattern scan")
+        return
+    
+    logger.info("Starting daily pattern scan of top 30 stocks...")
+    settings = await get_settings()
+    
+    scan_result = ScanResult(
+        scan_type="pattern",
+        started_at=datetime.now(timezone.utc)
+    )
+    scan_doc = scan_result.model_dump()
+    scan_doc['started_at'] = scan_doc['started_at'].isoformat()
+    await db.scan_results.insert_one(scan_doc)
+    
+    try:
+        alerts = await scan_top_stocks_patterns()
+        alerts_generated = 0
+        
+        for alert in alerts:
+            severity = "critical" if abs(alert["expected_move"]) >= 30 else "high"
+            direction = "BUY" if alert["expected_move"] > 0 else "SELL"
+            
+            notification = NotificationResponse(
+                ticker=alert["ticker"],
+                type=f"PATTERN_{direction}",
+                message=f"{alert['pattern'].replace('_', ' ').title()} pattern detected on {alert['ticker']} ({alert['name']})",
+                reason=f"High-reliability {alert['reliability']} pattern suggesting {alert['expected_move']:+.0f}% move",
+                severity=severity,
+                expected_move=alert["expected_move"],
+                source="pattern_scan"
+            )
+            
+            notif_doc = notification.model_dump()
+            notif_doc['timestamp'] = notif_doc['timestamp'].isoformat()
+            await db.notifications.insert_one(notif_doc)
+            
+            await dispatch_notification(notification)
+            alerts_generated += 1
+        
+        settings.last_pattern_scan = datetime.now(timezone.utc).isoformat()
+        await save_settings(settings)
+        
+        await db.scan_results.update_one(
+            {"id": scan_result.id},
+            {"$set": {
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "stocks_scanned": len(TOP_30_STOCKS),
+                "alerts_generated": alerts_generated,
+                "status": "completed",
+                "details": {"patterns_found": len(alerts)}
+            }}
+        )
+        
+        logger.info(f"Pattern scan completed: {len(alerts)} patterns, {alerts_generated} alerts")
+    
+    except Exception as e:
+        logger.error(f"Pattern scan failed: {e}")
+        await db.scan_results.update_one(
+            {"id": scan_result.id},
+            {"$set": {"status": "failed", "details": {"error": str(e)}}}
+        )
+
+# =============================================================================
+# AI PREDICTION SERVICE
+# =============================================================================
+async def analyze_stock_with_ai(ticker: str, quote: Dict, daily_data: List[Dict], patterns: List[Dict]) -> Dict[str, Any]:
+    chat = LlmChat(
+        api_key=EMERGENT_LLM_KEY,
+        session_id=f"stock-analysis-{ticker}-{uuid.uuid4()}",
+        system_message="""You are an expert stock market analyst. Analyze the provided stock data and candlestick patterns.
+        Return JSON with: prediction (BUY/SELL/HOLD), confidence (0-100), analysis (string), risk_level (LOW/MEDIUM/HIGH), 
+        price_target (number or null), time_horizon (short/medium/long), is_urgent (boolean), urgency_reason (string or null)"""
+    ).with_model("openai", "gpt-5.2")
+    
+    recent_candles = daily_data[:5] if daily_data else []
+    pattern_names = [p["name"] for p in patterns] if patterns else []
+    avg_expected_move = sum(p.get("expected_move", 0) for p in patterns) / len(patterns) if patterns else 0
+    
+    prompt = f"""Analyze {ticker}: Price ${quote.get('price', 'N/A')}, Change {quote.get('change_percent', 'N/A')}
+Patterns detected: {pattern_names}, Avg expected move: {avg_expected_move:.1f}%
+Recent candles: {recent_candles[:3]}
+Return ONLY valid JSON."""
+
+    try:
+        response = await chat.send_message(UserMessage(text=prompt))
+        import json
+        json_start = response.find('{')
+        json_end = response.rfind('}') + 1
+        if json_start != -1 and json_end > json_start:
+            return json.loads(response[json_start:json_end])
+    except Exception as e:
+        logger.error(f"AI analysis error: {e}")
+    
+    return {"prediction": "HOLD", "confidence": 50, "analysis": "Analysis unavailable", "risk_level": "MEDIUM", 
+            "price_target": None, "time_horizon": "medium", "is_urgent": False, "urgency_reason": None}
+
+async def analyze_chart_image_with_ai(image_base64: str, ticker: Optional[str] = None) -> Dict[str, Any]:
+    chat = LlmChat(
+        api_key=EMERGENT_LLM_KEY,
+        session_id=f"chart-analysis-{uuid.uuid4()}",
+        system_message="""You are an expert technical analyst. Analyze the chart image and return JSON with:
+        detected_patterns (array), trend (uptrend/downtrend/sideways), support_level, resistance_level,
+        prediction (BUY/SELL/HOLD), confidence (0-100), analysis (string), risk_level, is_urgent, urgency_reason"""
+    ).with_model("openai", "gpt-5.2")
+    
+    try:
+        image_content = ImageContent(image_base64=image_base64)
+        response = await chat.send_message(UserMessage(text=f"Analyze this chart{' for ' + ticker if ticker else ''}. Return JSON only.", file_contents=[image_content]))
+        import json
+        json_start = response.find('{')
+        json_end = response.rfind('}') + 1
+        if json_start != -1 and json_end > json_start:
+            return json.loads(response[json_start:json_end])
+    except Exception as e:
+        logger.error(f"Chart analysis error: {e}")
+    
+    return {"detected_patterns": [], "trend": "unknown", "prediction": "HOLD", "confidence": 40, 
+            "analysis": "Unable to analyze chart", "risk_level": "HIGH", "is_urgent": False}
 
 # =============================================================================
 # API ROUTES
 # =============================================================================
 @api_router.get("/")
 async def root():
-    return {"message": "Stock Prediction API", "patterns_count": len(CANDLESTICK_PATTERNS)}
+    return {"message": "MarketPulse AI API", "patterns_count": len(CANDLESTICK_PATTERNS)}
 
 @api_router.get("/health")
 async def health_check():
-    return {"status": "healthy", "patterns_loaded": len(CANDLESTICK_PATTERNS)}
+    return {"status": "healthy", "patterns_loaded": len(CANDLESTICK_PATTERNS), "market_open": is_market_hours()}
+
+@api_router.get("/settings")
+async def get_settings_endpoint():
+    settings = await get_settings()
+    # Mask sensitive data
+    result = settings.model_dump()
+    if result.get("resend_api_key"):
+        result["resend_api_key"] = "***configured***"
+    if result.get("twilio_auth_token"):
+        result["twilio_auth_token"] = "***configured***"
+    return result
+
+@api_router.put("/settings")
+async def update_settings_endpoint(update: SettingsUpdate):
+    settings = await get_settings()
+    update_dict = update.model_dump(exclude_unset=True)
+    for key, value in update_dict.items():
+        if value is not None:
+            setattr(settings, key, value)
+    await save_settings(settings)
+    return {"success": True, "message": "Settings updated"}
+
+@api_router.post("/settings/test-discord")
+async def test_discord_notification():
+    settings = await get_settings()
+    if not settings.discord_webhook_url:
+        raise HTTPException(status_code=400, detail="Discord webhook not configured")
+    
+    success = await send_discord_notification(
+        settings.discord_webhook_url,
+        "🧪 Test notification from MarketPulse AI",
+        {"title": "Test Alert", "description": "If you see this, Discord notifications are working!", "color": 0x007AFF}
+    )
+    return {"success": success}
+
+@api_router.post("/settings/test-email")
+async def test_email_notification():
+    settings = await get_settings()
+    if not settings.resend_api_key or not settings.email_recipient:
+        raise HTTPException(status_code=400, detail="Email not configured")
+    
+    success = await send_email_notification(
+        settings.resend_api_key,
+        settings.email_recipient,
+        "🧪 Test - MarketPulse AI",
+        "<h1>Test Email</h1><p>If you see this, email notifications are working!</p>"
+    )
+    return {"success": success}
 
 @api_router.get("/search")
 async def search_stock(query: str):
-    """Search for stocks by ticker or company name"""
     results = await search_stocks(query)
     return {"results": results}
 
 @api_router.get("/stock/{ticker}")
 async def get_stock_info(ticker: str):
-    """Get stock information and quote"""
     quote = await get_stock_quote(ticker.upper())
     if not quote:
-        raise HTTPException(status_code=404, detail="Stock not found or API limit reached")
+        raise HTTPException(status_code=404, detail="Stock not found")
     return quote
 
 @api_router.get("/stock/{ticker}/daily")
 async def get_stock_daily(ticker: str):
-    """Get daily candlestick data"""
     daily_data = await get_daily_data(ticker.upper())
     if not daily_data:
         raise HTTPException(status_code=404, detail="Unable to fetch daily data")
     return {"data": daily_data}
 
 @api_router.post("/predict/{ticker}")
-async def predict_stock(ticker: str):
-    """Get AI-powered stock prediction"""
+async def predict_stock(ticker: str, background_tasks: BackgroundTasks):
     ticker = ticker.upper()
-    
-    # Fetch data
     quote = await get_stock_quote(ticker)
     if not quote:
         raise HTTPException(status_code=404, detail="Stock not found")
     
     daily_data = await get_daily_data(ticker)
-    
-    # Detect patterns
     detected_patterns = detect_patterns_from_data(daily_data)
-    
-    # Get AI analysis
     ai_result = await analyze_stock_with_ai(ticker, quote, daily_data, detected_patterns)
     
-    # Build response
+    avg_expected_move = sum(p.get("expected_move", 0) for p in detected_patterns) / len(detected_patterns) if detected_patterns else 0
+    
     prediction = StockPredictionResponse(
         ticker=ticker,
-        company_name=quote.get("ticker", ticker),
+        company_name=quote.get("name", ticker),
         current_price=quote.get("price"),
         prediction=ai_result.get("prediction", "HOLD"),
         confidence=ai_result.get("confidence", 50),
         analysis=ai_result.get("analysis", ""),
-        detected_patterns=detected_patterns,
+        detected_patterns=[p["name"] for p in detected_patterns],
         risk_level=ai_result.get("risk_level", "MEDIUM"),
         price_target=ai_result.get("price_target"),
         time_horizon=ai_result.get("time_horizon", "medium"),
-        is_urgent=ai_result.get("is_urgent", False),
-        urgency_reason=ai_result.get("urgency_reason")
+        is_urgent=ai_result.get("is_urgent", False) or abs(avg_expected_move) >= 15,
+        urgency_reason=ai_result.get("urgency_reason"),
+        expected_move_percent=avg_expected_move
     )
     
-    # Save to database
     doc = prediction.model_dump()
     doc['timestamp'] = doc['timestamp'].isoformat()
     await db.predictions.insert_one(doc)
     
     # Create notification if urgent
     if prediction.is_urgent:
+        severity = "critical" if abs(avg_expected_move) >= 30 else "high"
         notification = NotificationResponse(
             ticker=ticker,
             type=f"URGENT_{prediction.prediction}",
             message=f"Urgent {prediction.prediction} signal for {ticker}!",
-            reason=prediction.urgency_reason or "Strong pattern detected"
+            reason=prediction.urgency_reason or f"Strong pattern detected with {avg_expected_move:+.1f}% expected move",
+            severity=severity,
+            expected_move=avg_expected_move,
+            source="prediction"
         )
         notif_doc = notification.model_dump()
         notif_doc['timestamp'] = notif_doc['timestamp'].isoformat()
         await db.notifications.insert_one(notif_doc)
+        background_tasks.add_task(dispatch_notification, notification)
     
     return prediction
 
 @api_router.post("/analyze-chart")
 async def analyze_chart(request: ImageAnalysisRequest):
-    """Analyze uploaded chart image"""
     result = await analyze_chart_image_with_ai(request.image_base64, request.ticker)
     
     prediction = StockPredictionResponse(
-        ticker=request.ticker or "UNKNOWN",
+        ticker=request.ticker or "CHART",
         company_name=request.ticker or "From Chart",
         current_price=None,
         prediction=result.get("prediction", "HOLD"),
@@ -660,86 +1014,81 @@ async def analyze_chart(request: ImageAnalysisRequest):
         analysis=result.get("analysis", ""),
         detected_patterns=result.get("detected_patterns", []),
         risk_level=result.get("risk_level", "MEDIUM"),
-        price_target=result.get("support_level"),  # Use support as potential target
+        price_target=result.get("support_level"),
         time_horizon="short",
         is_urgent=result.get("is_urgent", False),
         urgency_reason=result.get("urgency_reason")
     )
     
-    # Save to database
     doc = prediction.model_dump()
     doc['timestamp'] = doc['timestamp'].isoformat()
     doc['source'] = 'chart_upload'
     await db.predictions.insert_one(doc)
     
-    return {
-        **prediction.model_dump(),
-        "trend": result.get("trend"),
-        "support_level": result.get("support_level"),
-        "resistance_level": result.get("resistance_level")
-    }
-
-@api_router.post("/analyze-chart/upload")
-async def analyze_chart_upload(file: UploadFile = File(...), ticker: Optional[str] = None):
-    """Analyze uploaded chart image file"""
-    contents = await file.read()
-    image_base64 = base64.b64encode(contents).decode('utf-8')
-    
-    request = ImageAnalysisRequest(image_base64=image_base64, ticker=ticker)
-    return await analyze_chart(request)
+    return {**prediction.model_dump(), "trend": result.get("trend"), "support_level": result.get("support_level"), "resistance_level": result.get("resistance_level")}
 
 @api_router.get("/patterns")
 async def get_patterns(pattern_type: Optional[str] = None, limit: int = 50):
-    """Get list of candlestick patterns"""
     patterns = CANDLESTICK_PATTERNS
     if pattern_type:
         patterns = {k: v for k, v in patterns.items() if v.get("type") == pattern_type}
-    
-    # Return limited results
     result = dict(list(patterns.items())[:limit])
     return {"patterns": result, "total": len(CANDLESTICK_PATTERNS)}
 
 @api_router.get("/notifications")
-async def get_notifications(unread_only: bool = False):
-    """Get notifications"""
+async def get_notifications(unread_only: bool = False, limit: int = 50):
     query = {"is_read": False} if unread_only else {}
-    notifications = await db.notifications.find(query, {"_id": 0}).sort("timestamp", -1).to_list(50)
-    
+    notifications = await db.notifications.find(query, {"_id": 0}).sort("timestamp", -1).to_list(limit)
     for notif in notifications:
         if isinstance(notif.get('timestamp'), str):
             notif['timestamp'] = datetime.fromisoformat(notif['timestamp'])
-    
     return {"notifications": notifications}
 
 @api_router.post("/notifications/{notification_id}/read")
 async def mark_notification_read(notification_id: str):
-    """Mark notification as read"""
-    result = await db.notifications.update_one(
-        {"id": notification_id},
-        {"$set": {"is_read": True}}
-    )
+    result = await db.notifications.update_one({"id": notification_id}, {"$set": {"is_read": True}})
     if result.modified_count == 0:
         raise HTTPException(status_code=404, detail="Notification not found")
     return {"success": True}
 
 @api_router.get("/history")
 async def get_prediction_history(ticker: Optional[str] = None, limit: int = 20):
-    """Get prediction history"""
     query = {"ticker": ticker.upper()} if ticker else {}
     predictions = await db.predictions.find(query, {"_id": 0}).sort("timestamp", -1).to_list(limit)
-    
     for pred in predictions:
         if isinstance(pred.get('timestamp'), str):
             pred['timestamp'] = datetime.fromisoformat(pred['timestamp'])
-    
     return {"predictions": predictions}
 
-@api_router.delete("/history")
-async def clear_history():
-    """Clear prediction history"""
-    await db.predictions.delete_many({})
-    await db.notifications.delete_many({})
-    return {"success": True, "message": "History cleared"}
+@api_router.get("/scans")
+async def get_scan_history(limit: int = 20):
+    scans = await db.scan_results.find({}, {"_id": 0}).sort("started_at", -1).to_list(limit)
+    return {"scans": scans}
+
+@api_router.post("/scan/news")
+async def trigger_news_scan(background_tasks: BackgroundTasks):
+    """Manually trigger a news scan"""
+    background_tasks.add_task(hourly_news_scan)
+    return {"success": True, "message": "News scan started in background"}
+
+@api_router.post("/scan/patterns")
+async def trigger_pattern_scan(background_tasks: BackgroundTasks):
+    """Manually trigger a pattern scan"""
+    background_tasks.add_task(daily_pattern_scan)
+    return {"success": True, "message": "Pattern scan started in background"}
+
+@api_router.get("/market-status")
+async def get_market_status():
+    est = pytz.timezone('America/New_York')
+    now = datetime.now(est)
+    is_open = is_market_hours()
+    
+    return {
+        "is_open": is_open,
+        "current_time_est": now.strftime("%Y-%m-%d %H:%M:%S"),
+        "day_of_week": now.strftime("%A"),
+        "market_hours": f"{MARKET_OPEN_HOUR}:{MARKET_OPEN_MINUTE:02d} - {MARKET_CLOSE_HOUR}:{MARKET_CLOSE_MINUTE:02d} EST"
+    }
 
 # Include the router
 app.include_router(api_router)
@@ -752,6 +1101,28 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.on_event("startup")
+async def startup_event():
+    # Schedule hourly news scan during trading hours (Mon-Fri, 9:30 AM - 4:00 PM EST)
+    scheduler.add_job(
+        hourly_news_scan,
+        CronTrigger(day_of_week='mon-fri', hour='9-15', minute='30'),  # Every hour at :30
+        id='hourly_news_scan',
+        replace_existing=True
+    )
+    
+    # Schedule daily pattern scan at 10:00 AM EST (after market open)
+    scheduler.add_job(
+        daily_pattern_scan,
+        CronTrigger(day_of_week='mon-fri', hour=10, minute=0),
+        id='daily_pattern_scan',
+        replace_existing=True
+    )
+    
+    scheduler.start()
+    logger.info("Scheduler started - News scan hourly during trading hours, Pattern scan daily at 10 AM EST")
+
 @app.on_event("shutdown")
-async def shutdown_db_client():
+async def shutdown_event():
+    scheduler.shutdown()
     client.close()

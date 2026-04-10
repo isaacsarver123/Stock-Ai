@@ -24,6 +24,8 @@ class StockPredictionAPITester:
                 response = requests.get(url, headers=headers, timeout=timeout)
             elif method == 'POST':
                 response = requests.post(url, json=data, headers=headers, timeout=timeout)
+            elif method == 'PUT':
+                response = requests.put(url, json=data, headers=headers, timeout=timeout)
 
             print(f"   Status: {response.status_code}")
             
@@ -51,7 +53,7 @@ class StockPredictionAPITester:
             return False, {}
 
     def test_health_check(self):
-        """Test health endpoint and verify patterns loaded"""
+        """Test health endpoint and verify patterns loaded and market_open status"""
         success, response = self.run_test(
             "Health Check",
             "GET",
@@ -60,12 +62,22 @@ class StockPredictionAPITester:
         )
         if success:
             patterns_count = response.get('patterns_loaded', 0)
-            if patterns_count >= 500:
+            market_open = response.get('market_open')
+            
+            patterns_ok = patterns_count >= 500
+            market_status_ok = market_open is not None
+            
+            if patterns_ok:
                 print(f"   ✅ Patterns loaded: {patterns_count} (>= 500)")
-                return True
             else:
                 print(f"   ❌ Insufficient patterns: {patterns_count} (< 500)")
-                return False
+                
+            if market_status_ok:
+                print(f"   ✅ Market status: {market_open}")
+            else:
+                print(f"   ❌ Market status missing")
+                
+            return patterns_ok and market_status_ok
         return False
 
     def test_stock_search(self):
@@ -104,7 +116,7 @@ class StockPredictionAPITester:
         return False
 
     def test_stock_prediction(self):
-        """Test AI stock prediction"""
+        """Test AI stock prediction with expected_move_percent"""
         success, response = self.run_test(
             "Stock Prediction",
             "POST",
@@ -113,12 +125,13 @@ class StockPredictionAPITester:
             timeout=60  # AI calls can take longer
         )
         if success:
-            required_fields = ['ticker', 'prediction', 'confidence', 'analysis', 'detected_patterns']
+            required_fields = ['ticker', 'prediction', 'confidence', 'analysis', 'detected_patterns', 'expected_move_percent']
             missing_fields = [field for field in required_fields if field not in response]
             if not missing_fields:
                 print(f"   ✅ All required fields present")
                 print(f"   Prediction: {response.get('prediction', 'N/A')}")
                 print(f"   Confidence: {response.get('confidence', 'N/A')}%")
+                print(f"   Expected Move: {response.get('expected_move_percent', 'N/A')}%")
                 print(f"   Patterns detected: {len(response.get('detected_patterns', []))}")
                 return True
             else:
@@ -196,6 +209,99 @@ class StockPredictionAPITester:
                 print(f"   ❌ Missing fields: {missing_fields}")
         return False
 
+    def test_market_status(self):
+        """Test market status API"""
+        success, response = self.run_test(
+            "Market Status",
+            "GET",
+            "market-status",
+            200
+        )
+        if success:
+            required_fields = ['is_open', 'current_time_est', 'day_of_week', 'market_hours']
+            missing_fields = [field for field in required_fields if field not in response]
+            if not missing_fields:
+                print(f"   ✅ All required fields present")
+                print(f"   Market Open: {response.get('is_open', 'N/A')}")
+                print(f"   Current Time: {response.get('current_time_est', 'N/A')}")
+                print(f"   Market Hours: {response.get('market_hours', 'N/A')}")
+                return True
+            else:
+                print(f"   ❌ Missing fields: {missing_fields}")
+        return False
+
+    def test_settings_get(self):
+        """Test settings GET API"""
+        success, response = self.run_test(
+            "Settings GET",
+            "GET",
+            "settings",
+            200
+        )
+        if success:
+            expected_fields = ['id', 'notifications_enabled']
+            present_fields = [field for field in expected_fields if field in response]
+            print(f"   ✅ Settings retrieved")
+            print(f"   Present fields: {list(response.keys())}")
+            print(f"   Notifications enabled: {response.get('notifications_enabled', 'N/A')}")
+            return len(present_fields) >= 1
+        return False
+
+    def test_settings_update(self):
+        """Test settings PUT API"""
+        test_settings = {
+            "notifications_enabled": True,
+            "discord_webhook_url": "https://discord.com/api/webhooks/test"
+        }
+        
+        success, response = self.run_test(
+            "Settings PUT",
+            "PUT",
+            "settings",
+            200,
+            data=test_settings
+        )
+        if success:
+            if response.get('success'):
+                print(f"   ✅ Settings updated successfully")
+                return True
+            else:
+                print(f"   ❌ Settings update failed: {response}")
+                return False
+        return False
+
+    def test_manual_news_scan(self):
+        """Test manual news scan trigger"""
+        success, response = self.run_test(
+            "Manual News Scan",
+            "POST",
+            "scan/news",
+            200
+        )
+        if success:
+            if response.get('success'):
+                print(f"   ✅ News scan triggered: {response.get('message', 'N/A')}")
+                return True
+            else:
+                print(f"   ❌ News scan failed: {response}")
+        return False
+
+    def test_manual_pattern_scan(self):
+        """Test manual pattern scan trigger"""
+        success, response = self.run_test(
+            "Manual Pattern Scan",
+            "POST",
+            "scan/patterns",
+            200
+        )
+        if success:
+            if response.get('success'):
+                print(f"   ✅ Pattern scan triggered: {response.get('message', 'N/A')}")
+                return True
+            else:
+                print(f"   ❌ Pattern scan failed: {response}")
+        return False
+
 def main():
     print("🚀 Starting Stock Prediction API Tests")
     print("=" * 50)
@@ -205,6 +311,11 @@ def main():
     # Run all tests
     tests = [
         tester.test_health_check,
+        tester.test_market_status,
+        tester.test_settings_get,
+        tester.test_settings_update,
+        tester.test_manual_news_scan,
+        tester.test_manual_pattern_scan,
         tester.test_stock_search,
         tester.test_stock_quote,
         tester.test_patterns_api,
