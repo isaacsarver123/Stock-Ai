@@ -16,7 +16,9 @@ import asyncio
 import pytz
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-import resend
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from twilio.rest import Client as TwilioClient
 from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
 
@@ -120,8 +122,13 @@ class SettingsModel(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default="global_settings")
     discord_webhook_url: Optional[str] = None
-    email_recipient: Optional[str] = None
-    resend_api_key: Optional[str] = None
+    # Email settings (SMTP)
+    email_recipient: Optional[str] = "dale@rc1.ca"  # Default recipient
+    smtp_server: Optional[str] = "smtp.gmail.com"
+    smtp_port: Optional[int] = 587
+    smtp_username: Optional[str] = None  # Your email address
+    smtp_password: Optional[str] = None  # App password
+    # Twilio SMS
     twilio_account_sid: Optional[str] = None
     twilio_auth_token: Optional[str] = None
     twilio_phone_from: Optional[str] = None
@@ -133,7 +140,10 @@ class SettingsModel(BaseModel):
 class SettingsUpdate(BaseModel):
     discord_webhook_url: Optional[str] = None
     email_recipient: Optional[str] = None
-    resend_api_key: Optional[str] = None
+    smtp_server: Optional[str] = None
+    smtp_port: Optional[int] = None
+    smtp_username: Optional[str] = None
+    smtp_password: Optional[str] = None
     twilio_account_sid: Optional[str] = None
     twilio_auth_token: Optional[str] = None
     twilio_phone_from: Optional[str] = None
@@ -303,6 +313,13 @@ async def get_settings() -> SettingsModel:
     """Get global settings from database"""
     settings_doc = await db.settings.find_one({"id": "global_settings"}, {"_id": 0})
     if settings_doc:
+        # Apply defaults for new fields
+        if settings_doc.get('email_recipient') is None:
+            settings_doc['email_recipient'] = "dale@rc1.ca"
+        if settings_doc.get('smtp_server') is None:
+            settings_doc['smtp_server'] = "smtp.gmail.com"
+        if settings_doc.get('smtp_port') is None:
+            settings_doc['smtp_port'] = 587
         return SettingsModel(**settings_doc)
     return SettingsModel()
 
@@ -329,20 +346,46 @@ async def send_discord_notification(webhook_url: str, message: str, embed: Dict 
         logger.error(f"Discord notification error: {e}")
         return False
 
-async def send_email_notification(api_key: str, to_email: str, subject: str, html_content: str) -> bool:
-    """Send email via Resend"""
-    if not api_key or not to_email:
+def send_email_smtp_sync(smtp_server: str, smtp_port: int, username: str, password: str, 
+                         to_email: str, subject: str, html_content: str) -> bool:
+    """Send email via SMTP (synchronous)"""
+    try:
+        msg = MIMEMultipart('alternative')
+        msg['Subject'] = subject
+        msg['From'] = f"MarketPulse AI <{username}>"
+        msg['To'] = to_email
+        
+        # Create plain text version
+        text_content = html_content.replace('<br>', '\n').replace('</p>', '\n')
+        import re
+        text_content = re.sub('<[^<]+?>', '', text_content)
+        
+        part1 = MIMEText(text_content, 'plain')
+        part2 = MIMEText(html_content, 'html')
+        msg.attach(part1)
+        msg.attach(part2)
+        
+        with smtplib.SMTP(smtp_server, smtp_port) as server:
+            server.starttls()
+            server.login(username, password)
+            server.sendmail(username, to_email, msg.as_string())
+        
+        logger.info(f"Email sent successfully to {to_email}")
+        return True
+    except Exception as e:
+        logger.error(f"SMTP email error: {e}")
+        return False
+
+async def send_email_notification(smtp_server: str, smtp_port: int, username: str, password: str,
+                                   to_email: str, subject: str, html_content: str) -> bool:
+    """Send email via SMTP (async wrapper)"""
+    if not all([username, password, to_email]):
+        logger.warning("Email not configured - missing SMTP credentials or recipient")
         return False
     try:
-        resend.api_key = api_key
-        params = {
-            "from": "MarketPulse AI <onboarding@resend.dev>",
-            "to": [to_email],
-            "subject": subject,
-            "html": html_content
-        }
-        await asyncio.to_thread(resend.Emails.send, params)
-        return True
+        return await asyncio.to_thread(
+            send_email_smtp_sync, smtp_server, smtp_port, username, password, to_email, subject, html_content
+        )
     except Exception as e:
         logger.error(f"Email notification error: {e}")
         return False
@@ -420,8 +463,11 @@ async def dispatch_notification(notification: NotificationResponse):
         if settings.discord_webhook_url:
             success = await send_discord_notification(settings.discord_webhook_url, f"🚨 **CRITICAL ALERT** 🚨", discord_embed)
             update_fields["sent_discord"] = success
-        if settings.resend_api_key and settings.email_recipient:
-            success = await send_email_notification(settings.resend_api_key, settings.email_recipient, f"🚨 CRITICAL: {notification.type} - {ticker}", email_html)
+        if settings.smtp_username and settings.smtp_password and settings.email_recipient:
+            success = await send_email_notification(
+                settings.smtp_server, settings.smtp_port, settings.smtp_username, settings.smtp_password,
+                settings.email_recipient, f"🚨 CRITICAL: {notification.type} - {ticker}", email_html
+            )
             update_fields["sent_email"] = success
         if settings.twilio_account_sid:
             success = await send_sms_notification(
@@ -435,8 +481,11 @@ async def dispatch_notification(notification: NotificationResponse):
         if settings.discord_webhook_url:
             success = await send_discord_notification(settings.discord_webhook_url, "", discord_embed)
             update_fields["sent_discord"] = success
-        if settings.resend_api_key and settings.email_recipient:
-            success = await send_email_notification(settings.resend_api_key, settings.email_recipient, f"Alert: {notification.type} - {ticker}", email_html)
+        if settings.smtp_username and settings.smtp_password and settings.email_recipient:
+            success = await send_email_notification(
+                settings.smtp_server, settings.smtp_port, settings.smtp_username, settings.smtp_password,
+                settings.email_recipient, f"Alert: {notification.type} - {ticker}", email_html
+            )
             update_fields["sent_email"] = success
     
     elif severity == "medium":
@@ -447,8 +496,11 @@ async def dispatch_notification(notification: NotificationResponse):
     
     else:  # low
         # Email only
-        if settings.resend_api_key and settings.email_recipient:
-            success = await send_email_notification(settings.resend_api_key, settings.email_recipient, f"Update: {notification.type} - {ticker}", email_html)
+        if settings.smtp_username and settings.smtp_password and settings.email_recipient:
+            success = await send_email_notification(
+                settings.smtp_server, settings.smtp_port, settings.smtp_username, settings.smtp_password,
+                settings.email_recipient, f"Update: {notification.type} - {ticker}", email_html
+            )
             update_fields["sent_email"] = success
     
     # Update notification record
@@ -887,8 +939,8 @@ async def get_settings_endpoint():
     settings = await get_settings()
     # Mask sensitive data
     result = settings.model_dump()
-    if result.get("resend_api_key"):
-        result["resend_api_key"] = "***configured***"
+    if result.get("smtp_password"):
+        result["smtp_password"] = "***configured***"
     if result.get("twilio_auth_token"):
         result["twilio_auth_token"] = "***configured***"
     return result
@@ -919,16 +971,28 @@ async def test_discord_notification():
 @api_router.post("/settings/test-email")
 async def test_email_notification():
     settings = await get_settings()
-    if not settings.resend_api_key or not settings.email_recipient:
-        raise HTTPException(status_code=400, detail="Email not configured")
+    if not settings.smtp_username or not settings.smtp_password:
+        raise HTTPException(status_code=400, detail="SMTP credentials not configured. Please set SMTP username (email) and password (app password).")
+    if not settings.email_recipient:
+        raise HTTPException(status_code=400, detail="Email recipient not configured")
     
     success = await send_email_notification(
-        settings.resend_api_key,
+        settings.smtp_server,
+        settings.smtp_port,
+        settings.smtp_username,
+        settings.smtp_password,
         settings.email_recipient,
         "🧪 Test - MarketPulse AI",
-        "<h1>Test Email</h1><p>If you see this, email notifications are working!</p>"
+        """<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background: #1a1a1a; color: white;">
+            <h1 style="color: #007AFF;">🧪 Test Email</h1>
+            <p style="font-size: 16px;">If you see this, email notifications are working!</p>
+            <p style="color: #666; font-size: 12px; margin-top: 20px;">MarketPulse AI</p>
+        </div>"""
     )
-    return {"success": success}
+    if success:
+        return {"success": True, "message": f"Test email sent to {settings.email_recipient}"}
+    else:
+        raise HTTPException(status_code=500, detail="Failed to send email. Check SMTP credentials.")
 
 @api_router.get("/search")
 async def search_stock(query: str):

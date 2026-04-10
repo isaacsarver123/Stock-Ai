@@ -385,22 +385,34 @@ const SettingsModal = ({ isOpen, onClose }) => {
             </div>
           </div>
 
-          {/* Email Settings */}
+          {/* Email Settings (SMTP) */}
           <div className="space-y-3">
             <Label className="text-lg font-semibold flex items-center gap-2">
-              <Mail className="h-5 w-5 text-blue-400" /> Email Notifications
+              <Mail className="h-5 w-5 text-blue-400" /> Email Notifications (SMTP)
             </Label>
-            <p className="text-sm text-zinc-400">Receive regular updates and critical alerts via email</p>
+            <p className="text-sm text-zinc-400">Emails will be sent to: <span className="text-blue-400 font-mono">{settings.email_recipient || 'dale@rc1.ca'}</span></p>
             <div className="grid grid-cols-2 gap-2">
-              <Input placeholder="your@email.com" value={settings.email_recipient || ''}
-                onChange={(e) => setSettings({...settings, email_recipient: e.target.value})}
+              <Input placeholder="SMTP Server (smtp.gmail.com)" value={settings.smtp_server || 'smtp.gmail.com'}
+                onChange={(e) => setSettings({...settings, smtp_server: e.target.value})}
                 className="bg-zinc-800 border-zinc-700" />
-              <Input placeholder="Resend API Key (re_...)" type="password"
-                value={settings.resend_api_key === '***configured***' ? '' : (settings.resend_api_key || '')}
-                onChange={(e) => setSettings({...settings, resend_api_key: e.target.value})}
+              <Input placeholder="SMTP Port (587)" type="number" value={settings.smtp_port || 587}
+                onChange={(e) => setSettings({...settings, smtp_port: parseInt(e.target.value)})}
+                className="bg-zinc-800 border-zinc-700" />
+              <Input placeholder="Your Email (login)" value={settings.smtp_username || ''}
+                onChange={(e) => setSettings({...settings, smtp_username: e.target.value})}
+                className="bg-zinc-800 border-zinc-700" />
+              <Input placeholder="App Password" type="password"
+                value={settings.smtp_password === '***configured***' ? '' : (settings.smtp_password || '')}
+                onChange={(e) => setSettings({...settings, smtp_password: e.target.value})}
                 className="bg-zinc-800 border-zinc-700" />
             </div>
-            <Button variant="outline" size="sm" onClick={testEmail}>Test Email</Button>
+            <p className="text-xs text-zinc-500">For Gmail: Use an App Password (not your regular password). Go to Google Account → Security → 2-Step Verification → App passwords</p>
+            <div className="flex gap-2">
+              <Input placeholder="Recipient Email" value={settings.email_recipient || 'dale@rc1.ca'}
+                onChange={(e) => setSettings({...settings, email_recipient: e.target.value})}
+                className="bg-zinc-800 border-zinc-700 flex-1" />
+              <Button variant="outline" size="sm" onClick={testEmail}>Test Email</Button>
+            </div>
           </div>
 
           {/* SMS Settings */}
