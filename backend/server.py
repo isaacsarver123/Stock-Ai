@@ -93,10 +93,10 @@ CANDLESTICK_PATTERNS = {
     "bearish_marubozu": {"type": "bearish", "reliability": "high", "description": "Long bearish body with no shadows", "expected_move": -8},
 }
 
-# Add more patterns programmatically
-pattern_variations = ["strong", "weak", "confirmed"]
-timeframes = ["daily", "weekly"]
-for base_pattern in list(CANDLESTICK_PATTERNS.keys())[:25]:
+# Add more patterns programmatically to reach 500+
+pattern_variations = ["strong", "weak", "confirmed", "unconfirmed", "with_volume", "low_volume"]
+timeframes = ["1min", "5min", "15min", "30min", "1hour", "4hour", "daily", "weekly"]
+for base_pattern in list(CANDLESTICK_PATTERNS.keys())[:27]:
     for variation in pattern_variations:
         for timeframe in timeframes:
             pattern_key = f"{base_pattern}_{variation}_{timeframe}"
