@@ -1,34 +1,154 @@
-.App-logo {
-    height: 40vmin;
-    pointer-events: none;
-}
-
-@media (prefers-reduced-motion: no-preference) {
-    .App-logo {
-        animation: App-logo-spin infinite 20s linear;
-    }
-}
-
-.App-header {
-    background-color: #0f0f10;
+/* Custom App Styles */
+.App {
     min-height: 100vh;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    font-size: calc(10px + 2vmin);
+}
+
+/* Recharts custom styling */
+.recharts-cartesian-grid-horizontal line,
+.recharts-cartesian-grid-vertical line {
+    stroke: rgba(255, 255, 255, 0.05);
+}
+
+.recharts-tooltip-wrapper {
+    outline: none;
+}
+
+.recharts-default-tooltip {
+    background-color: #121212 !important;
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    border-radius: 4px !important;
+}
+
+/* Custom selection */
+::selection {
+    background-color: rgba(0, 122, 255, 0.3);
     color: white;
 }
 
-.App-link {
-    color: #61dafb;
+/* Focus states */
+*:focus-visible {
+    outline: 2px solid #007AFF;
+    outline-offset: 2px;
 }
 
-@keyframes App-logo-spin {
+/* Loading skeleton animation */
+@keyframes shimmer {
+    0% {
+        background-position: -200% 0;
+    }
+    100% {
+        background-position: 200% 0;
+    }
+}
+
+.skeleton {
+    background: linear-gradient(
+        90deg,
+        rgba(255, 255, 255, 0.05) 25%,
+        rgba(255, 255, 255, 0.1) 50%,
+        rgba(255, 255, 255, 0.05) 75%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+}
+
+/* Hover lift effect */
+.hover-lift {
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.hover-lift:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.5);
+}
+
+/* Data table styling */
+.data-table {
+    font-feature-settings: "tnum";
+    font-variant-numeric: tabular-nums;
+}
+
+/* Confidence meter */
+.confidence-meter {
+    height: 4px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.confidence-meter-fill {
+    height: 100%;
+    transition: width 0.5s ease;
+}
+
+/* Prediction card urgency glow */
+.urgent-glow {
+    box-shadow: 0 0 40px rgba(255, 59, 48, 0.2);
+}
+
+/* Pattern badge */
+.pattern-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.25rem 0.5rem;
+    font-size: 0.75rem;
+    font-family: 'IBM Plex Mono', monospace;
+    border-radius: 2px;
+    text-transform: capitalize;
+}
+
+/* Notification dot pulse */
+@keyframes dot-pulse {
+    0%, 100% {
+        transform: scale(1);
+        opacity: 1;
+    }
+    50% {
+        transform: scale(1.2);
+        opacity: 0.8;
+    }
+}
+
+.notification-dot {
+    animation: dot-pulse 2s ease-in-out infinite;
+}
+
+/* Chart container */
+.chart-container {
+    position: relative;
+}
+
+.chart-container::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: linear-gradient(
+        to right,
+        #0A0A0A 0%,
+        transparent 5%,
+        transparent 95%,
+        #0A0A0A 100%
+    );
+}
+
+/* Ticker tape effect */
+.ticker-tape {
+    display: flex;
+    overflow: hidden;
+    white-space: nowrap;
+}
+
+.ticker-tape-content {
+    display: flex;
+    animation: ticker 30s linear infinite;
+}
+
+@keyframes ticker {
     from {
-        transform: rotate(0deg);
+        transform: translateX(0);
     }
     to {
-        transform: rotate(360deg);
+        transform: translateX(-50%);
     }
 }
