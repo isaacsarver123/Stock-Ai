@@ -879,30 +879,40 @@ async def daily_pattern_scan():
 # AI PREDICTION SERVICE
 # =============================================================================
 async def analyze_stock_with_ai(ticker: str, quote: Dict, daily_data: List[Dict], patterns: List[Dict]) -> Dict[str, Any]:
-    """Analyze stock using OpenAI GPT-4o"""
+    """Analyze stock using OpenAI GPT-4o (best model for analysis)"""
     recent_candles = daily_data[:5] if daily_data else []
     pattern_names = [p["name"] for p in patterns] if patterns else []
     avg_expected_move = sum(p.get("expected_move", 0) for p in patterns) / len(patterns) if patterns else 0
     
-    system_message = """You are an expert stock market analyst. Analyze the provided stock data and candlestick patterns.
-Return JSON with: prediction (BUY/SELL/HOLD), confidence (0-100), analysis (string), risk_level (LOW/MEDIUM/HIGH), 
-price_target (number or null), time_horizon (short/medium/long), is_urgent (boolean), urgency_reason (string or null)"""
+    system_message = """You are an expert stock market analyst with deep knowledge of technical analysis and candlestick patterns. 
+Analyze the provided stock data and candlestick patterns thoroughly.
+Return JSON with: prediction (BUY/SELL/HOLD), confidence (0-100), analysis (detailed string explaining your reasoning), risk_level (LOW/MEDIUM/HIGH), 
+price_target (number or null), time_horizon (short/medium/long), is_urgent (boolean), urgency_reason (string or null if not urgent)"""
     
-    prompt = f"""Analyze {ticker}: Price ${quote.get('price', 'N/A')}, Change {quote.get('change_percent', 'N/A')}
-Patterns detected: {pattern_names}, Avg expected move: {avg_expected_move:.1f}%
-Recent candles: {recent_candles[:3]}
+    prompt = f"""Analyze {ticker}:
+- Current Price: ${quote.get('price', 'N/A')}
+- Daily Change: {quote.get('change_percent', 'N/A')}
+- Volume: {quote.get('volume', 'N/A')}
+- Market Cap: {quote.get('market_cap', 'N/A')}
+
+Detected Candlestick Patterns: {pattern_names}
+Average Expected Move from Patterns: {avg_expected_move:.1f}%
+
+Recent Price Action (last 5 candles): {recent_candles[:3]}
+
+Provide a comprehensive analysis considering the patterns detected and price action.
 Return ONLY valid JSON."""
 
     try:
         response = await asyncio.to_thread(
             lambda: openai_client.chat.completions.create(
-                model="gpt-4o",
+                model="gpt-4o",  # Best model for analysis tasks
                 messages=[
                     {"role": "system", "content": system_message},
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.7,
-                max_tokens=500
+                max_tokens=800
             )
         )
         response_text = response.choices[0].message.content
@@ -914,31 +924,32 @@ Return ONLY valid JSON."""
     except Exception as e:
         logger.error(f"AI analysis error: {e}")
     
-    return {"prediction": "HOLD", "confidence": 50, "analysis": "Analysis unavailable", "risk_level": "MEDIUM", 
+    return {"prediction": "HOLD", "confidence": 50, "analysis": "Analysis unavailable - check OpenAI API key and billing", "risk_level": "MEDIUM", 
             "price_target": None, "time_horizon": "medium", "is_urgent": False, "urgency_reason": None}
 
 async def analyze_chart_image_with_ai(image_base64: str, ticker: Optional[str] = None) -> Dict[str, Any]:
-    """Analyze chart image using OpenAI GPT-4o Vision"""
-    system_message = """You are an expert technical analyst. Analyze the chart image and return JSON with:
-detected_patterns (array), trend (uptrend/downtrend/sideways), support_level, resistance_level,
-prediction (BUY/SELL/HOLD), confidence (0-100), analysis (string), risk_level, is_urgent, urgency_reason"""
+    """Analyze chart image using OpenAI GPT-4o Vision (best for image analysis)"""
+    system_message = """You are an expert technical analyst specializing in chart pattern recognition. 
+Analyze the chart image thoroughly and identify candlestick patterns, trend direction, support/resistance levels.
+Return JSON with: detected_patterns (array of pattern names), trend (uptrend/downtrend/sideways), support_level (number or null), resistance_level (number or null),
+prediction (BUY/SELL/HOLD), confidence (0-100), analysis (detailed string), risk_level (LOW/MEDIUM/HIGH), is_urgent (boolean), urgency_reason (string or null)"""
     
     try:
         response = await asyncio.to_thread(
             lambda: openai_client.chat.completions.create(
-                model="gpt-4o",
+                model="gpt-4o",  # Best model for vision tasks
                 messages=[
                     {"role": "system", "content": system_message},
                     {
                         "role": "user",
                         "content": [
-                            {"type": "text", "text": f"Analyze this chart{' for ' + ticker if ticker else ''}. Return JSON only."},
+                            {"type": "text", "text": f"Analyze this stock chart{' for ' + ticker if ticker else ''}. Identify patterns, trend, and provide trading recommendation. Return JSON only."},
                             {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_base64}"}}
                         ]
                     }
                 ],
                 temperature=0.7,
-                max_tokens=500
+                max_tokens=800
             )
         )
         response_text = response.choices[0].message.content
@@ -951,7 +962,7 @@ prediction (BUY/SELL/HOLD), confidence (0-100), analysis (string), risk_level, i
         logger.error(f"Chart analysis error: {e}")
     
     return {"detected_patterns": [], "trend": "unknown", "prediction": "HOLD", "confidence": 40, 
-            "analysis": "Unable to analyze chart", "risk_level": "HIGH", "is_urgent": False}
+            "analysis": "Unable to analyze chart - check OpenAI API key and billing", "risk_level": "HIGH", "is_urgent": False}
 
 # =============================================================================
 # API ROUTES

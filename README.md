@@ -1,92 +1,28 @@
 # MarketPulse AI - Stock Prediction Platform
 
-An AI-powered stock prediction platform that analyzes candlestick patterns, scans financial news, and sends multi-channel notifications for potential trading opportunities.
+AI-powered stock prediction platform with candlestick pattern recognition, automated news scanning, and multi-channel notifications.
 
 ## Features
 
-### Core Features
-- **Real-time Stock Data** - Free data from Yahoo Finance (no API key required)
-- **AI-Powered Predictions** - Uses OpenAI GPT-4o for stock analysis
-- **1,323+ Candlestick Patterns** - Comprehensive pattern recognition database
-- **Chart Image Analysis** - Upload chart screenshots for AI analysis
-- **Multi-Channel Notifications** - Email (SMTP), Discord, and SMS alerts
+- **Real-time Stock Data** - Yahoo Finance (FREE, no API key)
+- **AI-Powered Predictions** - OpenAI GPT-4o for analysis
+- **1,323+ Candlestick Patterns** - Comprehensive pattern database
+- **Chart Image Analysis** - Upload screenshots for AI analysis
+- **Automated Scanning** - Hourly news + daily pattern scans during market hours
+- **Multi-Channel Alerts** - Email (SMTP), Discord webhooks, SMS (Twilio)
 
-### Automated Scanning
-- **Hourly News Scan** - Runs during market hours (Mon-Fri 9:30 AM - 4:00 PM EST)
-- **Daily Pattern Scan** - Scans top 30 stocks at 10:00 AM EST
-- **Smart Alerting** - Only alerts on 15%+ potential moves with high confidence
-
-### Notification Priority System
-| Severity | Channels | Trigger |
-|----------|----------|---------|
-| Critical | Email + Discord + SMS | 30%+ potential moves |
-| High | Email + Discord | 15-30% potential moves |
-| Medium | Discord only | Pattern alerts |
-| Low | Email only | Regular updates |
-
----
-
-## Candlestick Patterns (1,323 Total)
-
-### Base Patterns (27 Core Patterns)
-
-#### Bullish Reversal Patterns
-| Pattern | Reliability | Expected Move |
-|---------|-------------|---------------|
-| Abandoned Baby (Bullish) | Very High | +18% |
-| Bullish Kicker | Very High | +15% |
-| Three White Soldiers | High | +12% |
-| Morning Doji Star | High | +9% |
-| Morning Star | High | +8% |
-| Bullish Marubozu | High | +8% |
-| Bullish Engulfing | High | +7% |
-| Hammer | High | +5% |
-| Bullish Harami Cross | Moderate | +5% |
-| Bullish Harami | Moderate | +4% |
-| Piercing Line | Moderate | +4% |
-| Tweezer Bottom | Moderate | +4% |
-| Dragonfly Doji | Moderate | +4% |
-| Inverted Hammer | Moderate | +3% |
-
-#### Bearish Reversal Patterns
-| Pattern | Reliability | Expected Move |
-|---------|-------------|---------------|
-| Abandoned Baby (Bearish) | Very High | -18% |
-| Bearish Kicker | Very High | -15% |
-| Three Black Crows | High | -12% |
-| Evening Doji Star | High | -9% |
-| Evening Star | High | -8% |
-| Bearish Marubozu | High | -8% |
-| Bearish Engulfing | High | -7% |
-| Dark Cloud Cover | Moderate | -5% |
-| Shooting Star | Moderate | -5% |
-| Hanging Man | Moderate | -5% |
-| Bearish Harami | Moderate | -4% |
-| Gravestone Doji | Moderate | -4% |
-
-#### Neutral/Indecision Patterns
-| Pattern | Reliability | Description |
-|---------|-------------|-------------|
-| Doji | Moderate | Indecision, potential reversal |
-
-### Pattern Variations
-Each base pattern has 48 variations across:
-- **Strength**: Strong, Weak, Confirmed, Unconfirmed, With Volume, Low Volume
-- **Timeframes**: 1min, 5min, 15min, 30min, 1hour, 4hour, Daily, Weekly
-
----
-
-## Local Installation
+## Quick Start
 
 ### Prerequisites
 - Python 3.11+
-- Node.js 18+
-- MongoDB (local or cloud)
-- OpenAI API key
+- Node.js 18+ & Yarn
+- MongoDB
+- OpenAI API key with credits
 
-### 1. Clone the Repository
+### 1. Clone & Setup
+
 ```bash
-git clone <repository-url>
+git clone <your-repo-url>
 cd marketpulse-ai
 ```
 
@@ -97,21 +33,21 @@ cd backend
 
 # Create virtual environment
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+source venv/bin/activate  # Windows: venv\Scripts\activate
 
 # Install dependencies
 pip install -r requirements.txt
 
-# Create .env file
-cat > .env << EOF
+# Create environment file
+cat > .env << 'EOF'
 MONGO_URL="mongodb://localhost:27017"
 DB_NAME="marketpulse"
-CORS_ORIGINS="http://localhost:3000"
-OPENAI_API_KEY="sk-your-openai-api-key"
+CORS_ORIGINS="http://localhost:3003"
+OPENAI_API_KEY="sk-your-openai-api-key-here"
 EOF
 
-# Start the backend
-uvicorn server:app --host 0.0.0.0 --port 8001 --reload
+# Start backend on port 8003 (avoid conflicts with existing services)
+uvicorn server:app --host 0.0.0.0 --port 8003 --reload
 ```
 
 ### 3. Frontend Setup
@@ -122,177 +58,293 @@ cd frontend
 # Install dependencies
 yarn install
 
-# Create .env file
-cat > .env << EOF
-REACT_APP_BACKEND_URL="http://localhost:8001"
+# Create environment file
+cat > .env << 'EOF'
+REACT_APP_BACKEND_URL="http://localhost:8003"
 EOF
 
-# Start the frontend
-yarn start
+# Start frontend on port 3003 (avoid conflicts)
+PORT=3003 yarn start
 ```
 
-### 4. MongoDB Setup (if not using cloud)
+### 4. Access the App
 
+Open http://localhost:3003 in your browser.
+
+---
+
+## Port Configuration
+
+Default ports are **8003** (backend) and **3003** (frontend) to avoid conflicts with common services.
+
+### If you have port conflicts:
+
+**Change backend port:**
 ```bash
-# Install MongoDB (Ubuntu/Debian)
-sudo apt-get install -y mongodb
-
-# Start MongoDB
-sudo systemctl start mongodb
-sudo systemctl enable mongodb
-
-# Or using Docker
-docker run -d -p 27017:27017 --name mongodb mongo:latest
+uvicorn server:app --host 0.0.0.0 --port YOUR_PORT --reload
 ```
+
+**Change frontend port:**
+```bash
+PORT=YOUR_PORT yarn start
+```
+
+**Update frontend .env to match:**
+```env
+REACT_APP_BACKEND_URL="http://localhost:YOUR_BACKEND_PORT"
+```
+
+### Common ports to avoid on your server:
+- 3000, 3001, 3002 (existing frontends)
+- 8001, 8002, 8847 (existing backends)
+- 27017 (MongoDB)
+- 11434 (Ollama)
+- 80, 443 (nginx)
 
 ---
 
 ## Configuration
 
+### OpenAI API Key
+
+1. Get an API key from https://platform.openai.com/api-keys
+2. Ensure you have billing set up with credits
+3. Add to `/backend/.env`:
+   ```env
+   OPENAI_API_KEY="sk-your-key-here"
+   ```
+
 ### Email Notifications (SMTP)
 
-1. Open the app and click **Settings**
-2. Under "Email Notifications (SMTP)":
-   - **SMTP Server**: `smtp.gmail.com` (default)
-   - **Port**: `587` (default)
-   - **Your Email**: Your Gmail address
-   - **App Password**: Gmail App Password (see below)
-   - **Recipient**: Email to receive alerts (default: `dale@rc1.ca`)
+Configure in the app's Settings page:
+- **SMTP Server**: `smtp.gmail.com`
+- **Port**: `587`
+- **Username**: Your email address
+- **Password**: Gmail App Password (not regular password)
 
-#### Getting a Gmail App Password
-1. Go to [Google Account Security](https://myaccount.google.com/security)
-2. Enable 2-Step Verification if not already enabled
-3. Go to "App passwords"
-4. Generate a new app password for "Mail"
-5. Use the 16-character password in the app
+**Getting Gmail App Password:**
+1. Enable 2-Step Verification at https://myaccount.google.com/security
+2. Go to App passwords → Generate for "Mail"
+3. Use the 16-character code
 
 ### Discord Notifications
 
-1. In Discord, go to Server Settings → Integrations → Webhooks
-2. Create a new webhook and copy the URL
-3. Paste the URL in Settings → Discord Webhook
+1. In Discord: Server Settings → Integrations → Webhooks
+2. Create webhook and copy URL
+3. Paste in Settings → Discord Webhook
 
 ### SMS Notifications (Twilio)
 
-1. Create a [Twilio account](https://www.twilio.com/)
-2. Get your Account SID and Auth Token
-3. Get a Twilio phone number
-4. Enter all details in Settings → SMS section
+1. Create account at https://www.twilio.com
+2. Get Account SID, Auth Token, and phone number
+3. Configure in Settings → SMS section
 
 ---
 
-## API Endpoints
+## Running as a Service (Linux)
+
+### Using systemd
+
+**Backend service** (`/etc/systemd/system/marketpulse-backend.service`):
+```ini
+[Unit]
+Description=MarketPulse AI Backend
+After=network.target mongodb.service
+
+[Service]
+Type=simple
+User=your-user
+WorkingDirectory=/path/to/marketpulse-ai/backend
+Environment=PATH=/path/to/marketpulse-ai/backend/venv/bin
+ExecStart=/path/to/marketpulse-ai/backend/venv/bin/uvicorn server:app --host 0.0.0.0 --port 8003
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+**Frontend service** (`/etc/systemd/system/marketpulse-frontend.service`):
+```ini
+[Unit]
+Description=MarketPulse AI Frontend
+After=network.target
+
+[Service]
+Type=simple
+User=your-user
+WorkingDirectory=/path/to/marketpulse-ai/frontend
+Environment=PORT=3003
+ExecStart=/usr/bin/yarn start
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+**Enable services:**
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable marketpulse-backend marketpulse-frontend
+sudo systemctl start marketpulse-backend marketpulse-frontend
+```
+
+### Using PM2 (Node.js process manager)
+
+```bash
+# Install PM2
+npm install -g pm2
+
+# Backend
+cd backend
+pm2 start "uvicorn server:app --host 0.0.0.0 --port 8003" --name marketpulse-backend
+
+# Frontend
+cd frontend
+pm2 start "PORT=3003 yarn start" --name marketpulse-frontend
+
+# Save and enable startup
+pm2 save
+pm2 startup
+```
+
+---
+
+## Nginx Reverse Proxy (Optional)
+
+If you want to access via domain name:
+
+```nginx
+# /etc/nginx/sites-available/marketpulse
+server {
+    listen 80;
+    server_name marketpulse.yourdomain.com;
+
+    location / {
+        proxy_pass http://localhost:3003;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+    }
+
+    location /api {
+        proxy_pass http://localhost:8003;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+```
+
+```bash
+sudo ln -s /etc/nginx/sites-available/marketpulse /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+---
+
+## API Reference
 
 ### Stock Data
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/search?query=AAPL` | GET | Search stocks |
-| `/api/stock/{ticker}` | GET | Get stock quote |
-| `/api/stock/{ticker}/daily` | GET | Get daily candles |
-| `/api/predict/{ticker}` | POST | Get AI prediction |
-| `/api/analyze-chart` | POST | Analyze chart image |
+| `/api/stock/{ticker}` | GET | Get quote |
+| `/api/stock/{ticker}/daily` | GET | Get candles |
+| `/api/predict/{ticker}` | POST | AI prediction |
+| `/api/analyze-chart` | POST | Analyze image |
 
-### Settings & Notifications
+### Settings & Alerts
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/settings` | GET | Get settings |
-| `/api/settings` | PUT | Update settings |
-| `/api/settings/test-discord` | POST | Test Discord webhook |
-| `/api/settings/test-email` | POST | Test email |
-| `/api/notifications` | GET | Get notifications |
-| `/api/history` | GET | Get prediction history |
+| `/api/settings` | GET/PUT | Get/update settings |
+| `/api/notifications` | GET | Get alerts |
+| `/api/market-status` | GET | Market hours |
 
 ### Scanning
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/scan/news` | POST | Trigger news scan |
 | `/api/scan/patterns` | POST | Trigger pattern scan |
-| `/api/scans` | GET | Get scan history |
-| `/api/market-status` | GET | Get market hours status |
 
 ---
 
-## Top 30 Stocks Scanned Daily
+## Candlestick Patterns
 
-The following stocks are automatically scanned for candlestick patterns:
+### High-Reliability Patterns (15%+ expected moves)
+| Pattern | Type | Expected Move |
+|---------|------|---------------|
+| Abandoned Baby | Reversal | ±18% |
+| Bullish/Bearish Kicker | Reversal | ±15% |
+| Three White Soldiers | Bullish | +12% |
+| Three Black Crows | Bearish | -12% |
 
-```
-AAPL  MSFT  GOOGL  AMZN  NVDA  TSLA  META  BRK-B  UNH  JNJ
-V     XOM   JPM    WMT   MA    PG    CVX   HD     LLY  MRK
-ABBV  PEP   KO     COST  AVGO  TMO   MCD   CSCO   ACN  DHR
-```
+### Moderate Patterns
+| Pattern | Type | Expected Move |
+|---------|------|---------------|
+| Morning/Evening Star | Reversal | ±8% |
+| Engulfing | Reversal | ±7% |
+| Hammer/Hanging Man | Reversal | ±5% |
+| Doji variants | Indecision | ±4% |
+
+Total: **1,323 patterns** including variations across timeframes.
 
 ---
 
 ## Automated Scan Schedule
 
-| Scan Type | Schedule | Description |
-|-----------|----------|-------------|
-| News Scan | Hourly at :30 | During market hours only |
-| Pattern Scan | Daily at 10:00 AM EST | Top 30 stocks, weekly candles |
+| Scan | Schedule | Description |
+|------|----------|-------------|
+| News | Hourly at :30 | During market hours only |
+| Patterns | Daily 10 AM EST | Top 30 stocks |
 
-**Market Hours**: Monday-Friday, 9:30 AM - 4:00 PM EST
-
-Scans automatically skip when the market is closed.
-
----
-
-## Tech Stack
-
-### Backend
-- **FastAPI** - Python web framework
-- **MongoDB** - Database
-- **APScheduler** - Cron job scheduling
-- **yfinance** - Yahoo Finance data
-- **OpenAI GPT-4o** - AI predictions
-- **SMTP** - Email notifications
-- **Twilio** - SMS notifications
-
-### Frontend
-- **React** - UI framework
-- **Tailwind CSS** - Styling
-- **Shadcn/UI** - Component library
-- **Recharts** - Charts
-- **Axios** - HTTP client
-
----
-
-## Environment Variables
-
-### Backend (`/backend/.env`)
-```env
-MONGO_URL="mongodb://localhost:27017"
-DB_NAME="marketpulse"
-CORS_ORIGINS="http://localhost:3000"
-OPENAI_API_KEY="sk-your-openai-api-key"
-```
-
-### Frontend (`/frontend/.env`)
-```env
-REACT_APP_BACKEND_URL="http://localhost:8001"
-```
+**Market Hours**: Mon-Fri, 9:30 AM - 4:00 PM EST
 
 ---
 
 ## Troubleshooting
 
-### Backend won't start
-- Check MongoDB is running: `sudo systemctl status mongodb`
-- Check port 8001 is available: `lsof -i :8001`
-- Check logs for errors
+### "Analysis unavailable"
+- Check OpenAI API key is valid
+- Verify billing/credits at https://platform.openai.com/account/billing
 
-### Email not sending
-- Verify SMTP credentials in Settings
-- For Gmail, ensure you're using an App Password, not your regular password
-- Check firewall allows outbound port 587
+### Port already in use
+```bash
+# Find what's using a port
+lsof -i :8003
+# or
+netstat -tlnp | grep 8003
+```
 
-### Scans not running
-- Scans only run during market hours (Mon-Fri 9:30 AM - 4:00 PM EST)
-- Check market status: `curl http://localhost:8001/api/market-status`
-- Trigger manual scan: `curl -X POST http://localhost:8001/api/scan/news`
+### MongoDB connection issues
+```bash
+# Check MongoDB status
+sudo systemctl status mongodb
+# or
+mongosh --eval "db.runCommand({ping:1})"
+```
+
+### Backend not starting
+```bash
+# Check logs
+tail -f /path/to/backend/logs/error.log
+# or if using systemd
+journalctl -u marketpulse-backend -f
+```
+
+---
+
+## Tech Stack
+
+- **Backend**: FastAPI, MongoDB, APScheduler, yfinance, OpenAI
+- **Frontend**: React, Tailwind CSS, Shadcn/UI, Recharts
+- **Notifications**: SMTP, Discord webhooks, Twilio SMS
 
 ---
 
 ## License
 
-MIT License - See LICENSE file for details.
+MIT License
