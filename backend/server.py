@@ -20,7 +20,7 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from twilio.rest import Client as TwilioClient
-from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
+from openai import OpenAI
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -31,7 +31,10 @@ client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
 # API Keys
-EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY')
+OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
+
+# Initialize OpenAI client
+openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
 # Create the main app
 app = FastAPI()
@@ -511,13 +514,10 @@ async def dispatch_notification(notification: NotificationResponse):
 # NEWS SCANNING SERVICE
 # =============================================================================
 async def scan_news_with_ai(hours_back: int = 1) -> List[NewsItem]:
-    """Scan financial news using AI with web search capability"""
+    """Scan financial news using OpenAI GPT-4o"""
     news_items = []
     
-    chat = LlmChat(
-        api_key=EMERGENT_LLM_KEY,
-        session_id=f"news-scan-{uuid.uuid4()}",
-        system_message="""You are a financial news analyst. Scan recent financial news and identify any news that could cause significant stock price movements (10%+ up or down).
+    system_message = """You are a financial news analyst. Scan recent financial news and identify any news that could cause significant stock price movements (10%+ up or down).
         
 Focus on:
 - Major security breaches or hacks
@@ -538,31 +538,40 @@ For each significant news item, provide:
 - Expected price move percentage (positive or negative)
 
 Return your response as a JSON array of objects with keys: ticker, headline, summary, sentiment, impact_score, potential_move, source"""
-    ).with_model("openai", "gpt-5.2")
     
-    prompt = f"""Search for and analyze the most impactful financial news from the last {hours_back} hours.
-    
-Look for news about major companies that could cause significant stock price movements (15%+ up or down).
+    prompt = f"""Based on your knowledge of recent major financial events, identify the most impactful financial news that could affect stock prices significantly (15%+ up or down).
+
 Focus especially on:
 - Security breaches (like data breaches, hacking incidents)
 - Earnings surprises
 - Regulatory actions
 - Product recalls or failures
 - Executive scandals
+- Major company announcements
 
-Return a JSON array of the most impactful news items. If no significant news, return an empty array [].
+Return a JSON array of the most impactful news items. If no significant news comes to mind, return an empty array [].
 Only include news that could realistically move a stock 10% or more."""
 
     try:
-        user_message = UserMessage(text=prompt)
-        response = await chat.send_message(user_message)
+        response = await asyncio.to_thread(
+            lambda: openai_client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": system_message},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.7,
+                max_tokens=1000
+            )
+        )
+        response_text = response.choices[0].message.content
         
         # Parse JSON response
         import json
-        json_start = response.find('[')
-        json_end = response.rfind(']') + 1
+        json_start = response_text.find('[')
+        json_end = response_text.rfind(']') + 1
         if json_start != -1 and json_end > json_start:
-            json_str = response[json_start:json_end]
+            json_str = response_text[json_start:json_end]
             news_data = json.loads(json_str)
             
             for item in news_data:
@@ -870,17 +879,14 @@ async def daily_pattern_scan():
 # AI PREDICTION SERVICE
 # =============================================================================
 async def analyze_stock_with_ai(ticker: str, quote: Dict, daily_data: List[Dict], patterns: List[Dict]) -> Dict[str, Any]:
-    chat = LlmChat(
-        api_key=EMERGENT_LLM_KEY,
-        session_id=f"stock-analysis-{ticker}-{uuid.uuid4()}",
-        system_message="""You are an expert stock market analyst. Analyze the provided stock data and candlestick patterns.
-        Return JSON with: prediction (BUY/SELL/HOLD), confidence (0-100), analysis (string), risk_level (LOW/MEDIUM/HIGH), 
-        price_target (number or null), time_horizon (short/medium/long), is_urgent (boolean), urgency_reason (string or null)"""
-    ).with_model("openai", "gpt-5.2")
-    
+    """Analyze stock using OpenAI GPT-4o"""
     recent_candles = daily_data[:5] if daily_data else []
     pattern_names = [p["name"] for p in patterns] if patterns else []
     avg_expected_move = sum(p.get("expected_move", 0) for p in patterns) / len(patterns) if patterns else 0
+    
+    system_message = """You are an expert stock market analyst. Analyze the provided stock data and candlestick patterns.
+Return JSON with: prediction (BUY/SELL/HOLD), confidence (0-100), analysis (string), risk_level (LOW/MEDIUM/HIGH), 
+price_target (number or null), time_horizon (short/medium/long), is_urgent (boolean), urgency_reason (string or null)"""
     
     prompt = f"""Analyze {ticker}: Price ${quote.get('price', 'N/A')}, Change {quote.get('change_percent', 'N/A')}
 Patterns detected: {pattern_names}, Avg expected move: {avg_expected_move:.1f}%
@@ -888,12 +894,23 @@ Recent candles: {recent_candles[:3]}
 Return ONLY valid JSON."""
 
     try:
-        response = await chat.send_message(UserMessage(text=prompt))
+        response = await asyncio.to_thread(
+            lambda: openai_client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": system_message},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.7,
+                max_tokens=500
+            )
+        )
+        response_text = response.choices[0].message.content
         import json
-        json_start = response.find('{')
-        json_end = response.rfind('}') + 1
+        json_start = response_text.find('{')
+        json_end = response_text.rfind('}') + 1
         if json_start != -1 and json_end > json_start:
-            return json.loads(response[json_start:json_end])
+            return json.loads(response_text[json_start:json_end])
     except Exception as e:
         logger.error(f"AI analysis error: {e}")
     
@@ -901,22 +918,35 @@ Return ONLY valid JSON."""
             "price_target": None, "time_horizon": "medium", "is_urgent": False, "urgency_reason": None}
 
 async def analyze_chart_image_with_ai(image_base64: str, ticker: Optional[str] = None) -> Dict[str, Any]:
-    chat = LlmChat(
-        api_key=EMERGENT_LLM_KEY,
-        session_id=f"chart-analysis-{uuid.uuid4()}",
-        system_message="""You are an expert technical analyst. Analyze the chart image and return JSON with:
-        detected_patterns (array), trend (uptrend/downtrend/sideways), support_level, resistance_level,
-        prediction (BUY/SELL/HOLD), confidence (0-100), analysis (string), risk_level, is_urgent, urgency_reason"""
-    ).with_model("openai", "gpt-5.2")
+    """Analyze chart image using OpenAI GPT-4o Vision"""
+    system_message = """You are an expert technical analyst. Analyze the chart image and return JSON with:
+detected_patterns (array), trend (uptrend/downtrend/sideways), support_level, resistance_level,
+prediction (BUY/SELL/HOLD), confidence (0-100), analysis (string), risk_level, is_urgent, urgency_reason"""
     
     try:
-        image_content = ImageContent(image_base64=image_base64)
-        response = await chat.send_message(UserMessage(text=f"Analyze this chart{' for ' + ticker if ticker else ''}. Return JSON only.", file_contents=[image_content]))
+        response = await asyncio.to_thread(
+            lambda: openai_client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": system_message},
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": f"Analyze this chart{' for ' + ticker if ticker else ''}. Return JSON only."},
+                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_base64}"}}
+                        ]
+                    }
+                ],
+                temperature=0.7,
+                max_tokens=500
+            )
+        )
+        response_text = response.choices[0].message.content
         import json
-        json_start = response.find('{')
-        json_end = response.rfind('}') + 1
+        json_start = response_text.find('{')
+        json_end = response_text.rfind('}') + 1
         if json_start != -1 and json_end > json_start:
-            return json.loads(response[json_start:json_end])
+            return json.loads(response_text[json_start:json_end])
     except Exception as e:
         logger.error(f"Chart analysis error: {e}")
     

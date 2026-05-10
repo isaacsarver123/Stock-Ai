@@ -6,7 +6,7 @@ An AI-powered stock prediction platform that analyzes candlestick patterns, scan
 
 ### Core Features
 - **Real-time Stock Data** - Free data from Yahoo Finance (no API key required)
-- **AI-Powered Predictions** - Uses OpenAI GPT-5.2 for stock analysis
+- **AI-Powered Predictions** - Uses OpenAI GPT-4o for stock analysis
 - **1,323+ Candlestick Patterns** - Comprehensive pattern recognition database
 - **Chart Image Analysis** - Upload chart screenshots for AI analysis
 - **Multi-Channel Notifications** - Email (SMTP), Discord, and SMS alerts
@@ -82,7 +82,7 @@ Each base pattern has 48 variations across:
 - Python 3.11+
 - Node.js 18+
 - MongoDB (local or cloud)
-- OpenAI API key (or Emergent LLM key)
+- OpenAI API key
 
 ### 1. Clone the Repository
 ```bash
@@ -107,7 +107,7 @@ cat > .env << EOF
 MONGO_URL="mongodb://localhost:27017"
 DB_NAME="marketpulse"
 CORS_ORIGINS="http://localhost:3000"
-EMERGENT_LLM_KEY="your-openai-or-emergent-key"
+OPENAI_API_KEY="sk-your-openai-api-key"
 EOF
 
 # Start the backend
@@ -244,7 +244,7 @@ Scans automatically skip when the market is closed.
 - **MongoDB** - Database
 - **APScheduler** - Cron job scheduling
 - **yfinance** - Yahoo Finance data
-- **OpenAI GPT-5.2** - AI predictions
+- **OpenAI GPT-4o** - AI predictions
 - **SMTP** - Email notifications
 - **Twilio** - SMS notifications
 
@@ -264,7 +264,7 @@ Scans automatically skip when the market is closed.
 MONGO_URL="mongodb://localhost:27017"
 DB_NAME="marketpulse"
 CORS_ORIGINS="http://localhost:3000"
-EMERGENT_LLM_KEY="your-api-key"
+OPENAI_API_KEY="sk-your-openai-api-key"
 ```
 
 ### Frontend (`/frontend/.env`)
@@ -279,7 +279,7 @@ REACT_APP_BACKEND_URL="http://localhost:8001"
 ### Backend won't start
 - Check MongoDB is running: `sudo systemctl status mongodb`
 - Check port 8001 is available: `lsof -i :8001`
-- Check logs: `tail -f /var/log/supervisor/backend.err.log`
+- Check logs for errors
 
 ### Email not sending
 - Verify SMTP credentials in Settings
@@ -296,9 +296,3 @@ REACT_APP_BACKEND_URL="http://localhost:8001"
 ## License
 
 MIT License - See LICENSE file for details.
-
----
-
-## Support
-
-For issues or questions, please open a GitHub issue.
